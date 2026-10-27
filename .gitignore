@@ -11,3 +11,8 @@ __pycache__/
 !examples/*.csv
 !examples/*.xlsx
 runs/
+
+# OAuth material never belongs in the repo
+google-oauth-client.json
+google-token.json
+client_secret*.json

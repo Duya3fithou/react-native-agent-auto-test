@@ -221,7 +221,8 @@ def _as_link(cell, target: str) -> None:
     cell.font = font
 
 
-def write_case(ws, case: dict, cols: Dict[str, int], verdict: Verdict, fill_ids: bool, link_root: str) -> None:
+def write_case(ws, case: dict, cols: Dict[str, int], verdict: Verdict, fill_ids: bool, link_root: str,
+               links: Optional[Dict[str, str]] = None) -> None:
     row = case["row"]
     for name in RESULT_FIELDS:
         cell = _writable(ws, row, cols.get(name))
@@ -261,7 +262,7 @@ def write_case(ws, case: dict, cols: Dict[str, int], verdict: Verdict, fill_ids:
         cell = _writable(ws, row, cols.get(name)) if name else None
         if cell is None:
             continue
-        target = os.path.normpath(os.path.join(link_root, rel)).replace(os.sep, "/")
+        target = (links or {}).get(rel) or os.path.normpath(os.path.join(link_root, rel)).replace(os.sep, "/")
         if cell.value:
             cell.value = f"{cell.value}\n{target}"
         else:
@@ -389,7 +390,8 @@ def convert_to_xls(path: Path) -> Optional[Path]:
 def export(cases_doc: dict, runs: List[dict], run_dir: Path, input_path: Optional[Path] = None,
            out_path: Optional[Path] = None, tab_name: Optional[str] = None, tester: Optional[str] = None,
            build: Optional[str] = None, run_date: Optional[dt.date] = None, fill_ids: bool = True,
-           only_new_tab: bool = False, also_xls: bool = False) -> dict:
+           only_new_tab: bool = False, also_xls: bool = False, links: Optional[Dict[str, str]] = None) -> dict:
+    """`links` maps run-relative evidence paths to public URLs (see upload.py); others stay local."""
     if not runs:
         raise UserError(f"No results-*.json found in {run_dir}. Run `rnsmoke run` first.")
     src = cases_doc["source"]
@@ -416,10 +418,13 @@ def export(cases_doc: dict, runs: List[dict], run_dir: Path, input_path: Optiona
 
     link_root = os.path.relpath(run_dir.resolve(), out_path.parent)
     counts: Counter = Counter()
+    evidence_links = Counter()
     for case in cases_doc["cases"]:
         verdict = combine(case, runs)
-        write_case(new_ws, case, cols, verdict, fill_ids, link_root)
+        write_case(new_ws, case, cols, verdict, fill_ids, link_root, links)
         counts[verdict.status] += 1
+        for rel in verdict.evidence.values():
+            evidence_links["uploaded" if (links or {}).get(rel) else "local"] += 1
 
     rows = [c["row"] for c in cases_doc["cases"]]
     summary = update_summary(new_ws, header_row, cols, min(rows), max(rows),
@@ -440,6 +445,7 @@ def export(cases_doc: dict, runs: List[dict], run_dir: Path, input_path: Optiona
         "sheet": new_ws.title,
         "source_sheet": src["sheet"],
         "counts": dict(counts),
+        "evidence_links": dict(evidence_links),
         "summary_cells": summary,
     }
 

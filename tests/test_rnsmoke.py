@@ -20,7 +20,13 @@ from openpyxl.worksheet.datavalidation import DataValidation
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skills" / "rn-smoke-test" / "scripts"))
 
-from rnsmoke import report, runner, template, testcases  # noqa: E402
+import io  # noqa: E402
+import os  # noqa: E402
+import urllib.error  # noqa: E402
+from unittest import mock  # noqa: E402
+
+from rnsmoke import gdrive, report, runner, template, testcases, upload  # noqa: E402
+from rnsmoke.util import UserError  # noqa: E402
 from rnsmoke.workspace import Workspace, select_cases  # noqa: E402
 
 HEADER = ["Test ID", "Platform", "Section", "Description", "Expected result", "Actual result", "Result",
@@ -291,6 +297,394 @@ class ExportTests(unittest.TestCase):
         verdict = report.combine(case, [{"platform": "ios", "results": {"k1": manual}},
                                         {"platform": "android", "results": {"k1": dict(manual)}}])
         self.assertEqual(verdict.note, "[Manual] Needs the OTP email")          # said once, no platform prefix
+
+
+class UploadTests(unittest.TestCase):
+    """Network is faked: upload._post is replaced, nothing leaves the machine."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.run_dir = Path(self.tmp.name)
+        for rel, data in (("evidence/ios/tc-001.png", b"PNGIOS"), ("evidence/android/tc-001.png", b"PNGAND"),
+                          ("evidence/android/tc-001.mp4", b"MP4")):
+            (self.run_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.run_dir / rel).write_bytes(data)
+        self.runs = [
+            {"platform": "ios", "results": {"k1": {"status": "pass", "evidence": "evidence/ios/tc-001.png"}}},
+            {"platform": "android", "results": {"k1": {"status": "pass", "evidence": "evidence/android/tc-001.png",
+                                                       "video": "evidence/android/tc-001.mp4"}}},
+        ]
+        self.calls = []
+
+        def fake_post(url, body, content_type, timeout=180, headers=None):
+            self.calls.append((url, body, content_type))
+            if "imgbb" in url:
+                return json.dumps({"success": True, "data": {"url": f"https://i.ibb.co/{len(self.calls)}.png"}}).encode()
+            return f"https://files.catbox.moe/f{len(self.calls)}.png".encode()
+
+        patches = [mock.patch.object(upload, "_post", fake_post), mock.patch.object(upload.time, "sleep")]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_multipart_body(self):
+        body, ctype = upload._multipart({"reqtype": "fileupload"}, "fileToUpload", self.run_dir / "evidence/ios/tc-001.png")
+        boundary = ctype.split("boundary=")[1]
+        self.assertTrue(body.startswith(f"--{boundary}\r\n".encode()))
+        self.assertIn(b'name="reqtype"\r\n\r\nfileupload\r\n', body)
+        self.assertIn(b'filename="tc-001.png"\r\nContent-Type: image/png\r\n\r\nPNGIOS', body)
+        self.assertTrue(body.endswith(f"\r\n--{boundary}--\r\n".encode()))
+
+    def test_upload_is_cached_per_file_content(self):
+        links = upload.upload_evidence(self.run_dir, self.runs, "catbox")
+        self.assertEqual(len(links), 3)
+        self.assertTrue(all(url == "https://catbox.moe/user/api.php" for url, _, _ in self.calls))
+        self.assertEqual(upload.upload_evidence(self.run_dir, self.runs, "catbox"), links)
+        self.assertEqual(len(self.calls), 3)                                  # nothing uploaded twice
+        (self.run_dir / "evidence/ios/tc-001.png").write_bytes(b"NEW")
+        upload.upload_evidence(self.run_dir, self.runs, "catbox")
+        self.assertEqual(len(self.calls), 4)                                  # only the changed file
+
+    def test_plan_has_no_side_effects(self):
+        plan = {p["file"]: p["action"] for p in upload.plan_uploads(self.run_dir, self.runs, "imgbb")}
+        self.assertEqual(plan["evidence/ios/tc-001.png"], "upload")
+        self.assertEqual(plan["evidence/android/tc-001.mp4"], "skip (images only)")
+        self.assertEqual(self.calls, [])
+        upload.upload_evidence(self.run_dir, self.runs, "catbox")
+        plan = {p["file"]: p["action"] for p in upload.plan_uploads(self.run_dir, self.runs, "catbox")}
+        self.assertTrue(plan["evidence/ios/tc-001.png"].startswith("reuse https://files.catbox.moe/"))
+
+    def test_host_rules(self):
+        upload.upload_evidence(self.run_dir, self.runs, "litterbox", expire="24h")
+        self.assertIn(b'name="time"\r\n\r\n24h\r\n', self.calls[0][1])
+        cache = json.loads((self.run_dir / "uploads.json").read_text())
+        self.assertTrue(all(entry["expires_at"] for entry in cache["files"].values()))
+        with self.assertRaises(UserError):
+            upload.upload_evidence(self.run_dir, self.runs, "litterbox", expire="7d")
+        with self.assertRaises(UserError):
+            upload.upload_evidence(self.run_dir, self.runs, "catbox", expire="1h")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("IMGBB_API_KEY", None)
+            with self.assertRaises(UserError):
+                upload.upload_evidence(self.run_dir, self.runs, "imgbb")
+        with mock.patch.dict(os.environ, {"IMGBB_API_KEY": "test-key"}):
+            links = upload.upload_evidence(self.run_dir, self.runs, "imgbb")
+        self.assertEqual(sorted(links), ["evidence/android/tc-001.png", "evidence/ios/tc-001.png"])  # no video
+
+    def test_droplr(self):
+        seen = []
+
+        def droplr_post(url, body, content_type, timeout=180, headers=None):
+            seen.append((url, body, content_type, headers))
+            return json.dumps({"code": f"c{len(seen)}", "shortlink": f"http://d.pr/i/c{len(seen)}"}).encode()
+
+        creds = {"DROPLR_USERNAME": "qa@example.com", "DROPLR_PASSWORD": "s3cret", "DROPLR_BOARD": "b42"}
+        with mock.patch.dict(os.environ, creds), mock.patch.object(upload, "_post", side_effect=droplr_post):
+            links = upload.upload_evidence(self.run_dir, self.runs, "droplr")
+        self.assertEqual(len(links), 3)                                      # images + the video
+        self.assertTrue(all(url.startswith("https://d.pr/i/") for url in links.values()))
+        url, body, ctype, headers = next(s for s in seen if "tc-001.png" in s[0] and s[1] == b"PNGIOS")
+        self.assertEqual(url, "https://api.droplr.com/files?filename=tc-001.png&board=b42")
+        self.assertEqual(ctype, "image/png")
+        self.assertEqual(headers["Authorization"], "Basic cWFAZXhhbXBsZS5jb206czNjcmV0")   # qa@example.com:s3cret
+        self.assertTrue(any(s[2] == "video/mp4" for s in seen))
+
+        with mock.patch.dict(os.environ, {"DROPLR_TOKEN": "jwt-123"}), \
+                mock.patch.object(upload, "_post", side_effect=droplr_post):
+            upload.upload_evidence(self.run_dir, self.runs, "droplr", force=True)
+        self.assertEqual(seen[-1][3]["Authorization"], "Bearer jwt-123")
+
+    def test_droplr_errors(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("DROPLR_")}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(UserError):                               # no credentials
+                upload.upload_evidence(self.run_dir, self.runs, "droplr")
+        denied = urllib.error.HTTPError("https://api.droplr.com/files", 401, "Unauthorized", {},
+                                        io.BytesIO(b'{"error": "bad credentials"}'))
+        self.addCleanup(denied.close)
+        with mock.patch.dict(os.environ, {"DROPLR_TOKEN": "bad"}), \
+                mock.patch.object(upload, "_post", side_effect=denied):
+            with self.assertRaises(UserError):                               # wrong credentials: stop at once
+                upload.upload_evidence(self.run_dir, self.runs, "droplr")
+        with mock.patch.dict(os.environ, {"DROPLR_TOKEN": "ok"}), \
+                mock.patch.object(upload, "_post", return_value=b'{"code": "x1"}'):
+            self.assertEqual(upload.upload_evidence(self.run_dir, self.runs, "droplr", retries=0), {})
+
+    def test_failures_keep_local_links(self):
+        with mock.patch.object(upload, "_post", side_effect=urllib.error.URLError("offline")):
+            self.assertEqual(upload.upload_evidence(self.run_dir, self.runs, "catbox", retries=1), {})
+        with mock.patch.object(upload, "_post", return_value=b"Internal error, try again"):
+            self.assertEqual(upload.upload_evidence(self.run_dir, self.runs, "catbox", retries=0), {})
+        self.assertFalse((self.run_dir / "uploads.json").exists())
+
+    def test_export_writes_public_links(self):
+        source = make_workbook(self.run_dir / "Demo.xlsx")
+        doc = testcases.load_cases(source)
+        run = fake_run(doc, "ios", ["pass", "fail", "manual", None, None, None], self.run_dir)
+        links = {run["results"][doc["cases"][0]["key"]]["evidence"]: "https://files.catbox.moe/abc.png"}
+        out = report.export(doc, [run], self.run_dir, run_date=dt.date(2026, 10, 27), links=links)
+        ws = load_workbook(out["output"])["2710"]
+        self.assertEqual(ws["H11"].value, "https://files.catbox.moe/abc.png")
+        self.assertEqual(ws["H11"].hyperlink.target, "https://files.catbox.moe/abc.png")
+        self.assertEqual(ws["H12"].value, "evidence/ios/tc-002.png")          # not uploaded -> local link
+        self.assertEqual(out["evidence_links"], {"uploaded": 1, "local": 1})
+
+
+class FakeGoogle:
+    """Minimal stand-in for the OAuth token endpoint and the Drive v3 API."""
+
+    def __init__(self, email="qa@company.com"):
+        self.email, self.calls, self.folders, self.n = email, [], {}, 0
+
+    def __call__(self, method, url, body=None, headers=None, timeout=180):
+        import re
+        import urllib.parse as up
+
+        self.calls.append((method, url, body, headers or {}))
+        parsed, query = up.urlparse(url), dict(up.parse_qsl(up.urlparse(url).query))
+        if url.startswith(gdrive.TOKEN_URL):
+            token = {"access_token": "at-1", "expires_in": 3600}
+            if b"grant_type=authorization_code" in (body or b""):
+                token["refresh_token"] = "rt-new"
+            return 200, {}, json.dumps(token).encode()
+        if parsed.path.endswith("/about"):
+            return 200, {}, json.dumps({"user": {"emailAddress": self.email}}).encode()
+        if parsed.path == "/drive/v3/files" and method == "GET":
+            name = re.search(r"name = '((?:[^'\\]|\\.)*)'", query["q"]).group(1).replace("\\'", "'")
+            parent = re.search(r"'([^']+)' in parents", query["q"]).group(1)
+            fid = self.folders.get((name, parent))
+            files = [{"id": fid, "webViewLink": f"https://drive.google.com/drive/folders/{fid}"}] if fid else []
+            return 200, {}, json.dumps({"files": files}).encode()
+        if parsed.path == "/drive/v3/files" and method == "POST":
+            meta = json.loads(body)
+            self.n += 1
+            self.folders[(meta["name"], (meta.get("parents") or ["root"])[0])] = f"fold{self.n}"
+            return 200, {}, json.dumps({"id": f"fold{self.n}",
+                                        "webViewLink": f"https://drive.google.com/drive/folders/fold{self.n}"}).encode()
+        if "/permissions" in parsed.path:
+            return 200, {}, b'{"id": "perm1"}'
+        if parsed.path == "/upload/drive/v3/files" and query.get("uploadType") == "resumable":
+            self.n += 1
+            return 200, {"location": f"https://www.googleapis.com/upload/drive/v3/files?upload_id=u{self.n}"}, b""
+        if method == "PUT" and "upload_id=" in url:
+            fid = "file" + url.split("upload_id=")[1]
+            return 200, {}, json.dumps({"id": fid, "webViewLink": f"https://drive.google.com/file/d/{fid}/view"}).encode()
+        return 404, {}, b'{"error": "not found"}'
+
+
+class GDriveTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        home = Path(self.tmp.name) / "home"
+        self.run_dir = Path(self.tmp.name) / "runs" / "2026-10-27_140158"
+        for rel in ("evidence/ios/tc-004.png", "evidence/android/tc-004.png", "evidence/android/tc-004.mp4"):
+            (self.run_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.run_dir / rel).write_bytes(rel.encode())
+        (self.run_dir / "cases.json").write_text(json.dumps({"source": {"path": "/x/[App - D1] Smoke testing.xlsx"}}))
+        self.runs = [{"platform": "ios", "results": {"k": {"evidence": "evidence/ios/tc-004.png"}}},
+                     {"platform": "android", "results": {"k": {"evidence": "evidence/android/tc-004.png",
+                                                               "video": "evidence/android/tc-004.mp4"}}}]
+        self.google = FakeGoogle()
+        for patcher in (mock.patch.object(gdrive, "HOME", home),
+                        mock.patch.object(gdrive, "TOKEN_FILE", home / "google-token.json"),
+                        mock.patch.object(gdrive, "CLIENT_FILE", home / "google-oauth-client.json"),
+                        mock.patch.object(gdrive, "BUNDLED_CLIENT", Path(self.tmp.name) / "bundled-client.json"),
+                        mock.patch.object(gdrive, "RESOURCE_DIR", Path(self.tmp.name) / "resource"),
+                        mock.patch.object(gdrive, "_http", self.google),
+                        mock.patch.dict(os.environ, {"RNSMOKE_GOOGLE_CLIENT_ID": "cid",
+                                                     "RNSMOKE_GOOGLE_CLIENT_SECRET": "csecret"})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        gdrive._save_token({"refresh_token": "rt-1", "access_token": None, "expires_at": 0})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_pkce_and_auth_url(self):
+        import base64 as b64
+        import hashlib as hl
+
+        verifier, challenge = gdrive.pkce_pair()
+        self.assertEqual(challenge, b64.urlsafe_b64encode(hl.sha256(verifier.encode()).digest()).decode().rstrip("="))
+        url = gdrive.auth_url("cid", "http://127.0.0.1:5000/", challenge, "st")
+        for part in ("scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file", "code_challenge_method=S256",
+                     "access_type=offline", "redirect_uri=http%3A%2F%2F127.0.0.1%3A5000%2F"):
+            self.assertIn(part, url)
+
+    def test_client_lookup_and_import(self):
+        no_env = {"RNSMOKE_GOOGLE_CLIENT_ID": "", "RNSMOKE_GOOGLE_CLIENT_SECRET": "", "RNSMOKE_GOOGLE_CLIENT_FILE": ""}
+        with mock.patch.dict(os.environ, no_env):
+            with self.assertRaises(UserError):
+                gdrive.load_client()
+            gdrive.BUNDLED_CLIENT.write_text(json.dumps({"installed": {"client_id": "bundled-id",
+                                                                       "client_secret": "bundled-secret"}}))
+            self.assertEqual(gdrive.load_client(), ("bundled-id", "bundled-secret"))      # shipped with the repo
+            downloaded = Path(self.tmp.name) / "client_secret_123.json"
+            downloaded.write_text(json.dumps({"installed": {"client_id": "own-id", "client_secret": "own-secret"}}))
+            stored = gdrive.import_client(downloaded)
+            self.assertEqual(oct(stored.stat().st_mode & 0o777), "0o600")
+            self.assertEqual(gdrive.load_client(), ("own-id", "own-secret"))              # personal file wins
+            downloaded.write_text('{"not": "a client"}')
+            with self.assertRaises(UserError):
+                gdrive.import_client(downloaded)
+
+    def test_link_from_id_and_downloaded_client(self):
+        def no_view_link(method, url, body=None, headers=None, timeout=180):
+            if method == "PUT":
+                return 200, {}, b'{"id": "abc123"}'
+            return self.google(method, url, body, headers, timeout)
+
+        with mock.patch.object(gdrive, "_http", side_effect=no_view_link):
+            link = gdrive.upload_file(self.run_dir / "evidence/ios/tc-004.png", "fold", "ios-tc-004.png", "image/png")
+        self.assertEqual(link, "https://drive.google.com/file/d/abc123/view")
+        downloads = Path(self.tmp.name) / "Downloads"
+        downloads.mkdir()
+        (downloads / "client_secret_1-abc.apps.googleusercontent.com.json").write_text("{}")
+        with mock.patch.object(gdrive.Path, "home", return_value=Path(self.tmp.name)):
+            self.assertEqual(gdrive.find_downloaded_client().name, "client_secret_1-abc.apps.googleusercontent.com.json")
+
+    def test_browser_login_via_loopback(self):
+        import threading
+        import urllib.parse as up
+        import urllib.request as ur
+
+        def fake_browser(url):
+            query = dict(up.parse_qsl(up.urlparse(url).query))
+            redirect = f"{query['redirect_uri']}?code=auth-code&state={query['state']}"
+            threading.Thread(target=lambda: ur.urlopen(redirect, timeout=10).read(), daemon=True).start()
+            return True
+
+        gdrive.TOKEN_FILE.unlink()
+        with mock.patch.object(gdrive.webbrowser, "open", side_effect=fake_browser):
+            record = gdrive.login(timeout=20)
+        self.assertEqual(record["refresh_token"], "rt-new")
+        self.assertEqual(record["account"], "qa@company.com")
+        exchange = next(c for c in self.google.calls if c[2] and b"grant_type=authorization_code" in c[2])
+        self.assertIn(b"code=auth-code", exchange[2])
+        self.assertIn(b"code_verifier=", exchange[2])
+        self.assertEqual(oct(gdrive.TOKEN_FILE.stat().st_mode & 0o777), "0o600")
+
+    def test_private_upload_and_cache(self):
+        links = upload.upload_evidence(self.run_dir, self.runs, "gdrive")
+        self.assertEqual(len(links), 3)
+        self.assertTrue(all(u.startswith("https://drive.google.com/file/d/") for u in links.values()))
+        self.assertEqual(sorted(self.google.folders), [("2026-10-27_140158", "fold2"),
+                                                       ("RN smoke evidence", "root"),
+                                                       ("[App - D1] Smoke testing", "fold1")])
+        self.assertFalse(any("/permissions" in c[1] for c in self.google.calls))        # private by default
+        upload_meta = [json.loads(c[2]) for c in self.google.calls if "uploadType=resumable" in c[1]]
+        self.assertIn({"name": "ios-tc-004.png", "parents": ["fold3"]}, upload_meta)
+        self.assertTrue(all(c[3].get("Authorization") == "Bearer at-1" for c in self.google.calls
+                            if "googleapis.com/drive" in c[1] or "uploadType" in c[1]))
+        token = json.loads(gdrive.TOKEN_FILE.read_text())
+        self.assertEqual(token["access_token"], "at-1")
+        self.assertEqual(oct(gdrive.TOKEN_FILE.stat().st_mode & 0o777), "0o600")
+        before = len(self.google.calls)
+        self.assertEqual(upload.upload_evidence(self.run_dir, self.runs, "gdrive"), links)
+        self.assertEqual(len(self.google.calls), before)                                # cached: no network
+
+    def test_share_modes(self):
+        upload.upload_evidence(self.run_dir, self.runs, "gdrive", share="domain")
+        permission = next(json.loads(c[2]) for c in self.google.calls if "/permissions" in c[1])
+        self.assertEqual(permission, {"type": "domain", "role": "reader", "domain": "company.com"})
+        self.google.email = "someone@gmail.com"
+        with self.assertRaises(UserError):
+            upload.upload_evidence(self.run_dir, self.runs, "gdrive", share="domain", force=True)
+        with self.assertRaises(UserError):
+            upload.upload_evidence(self.run_dir, self.runs, "catbox", share="domain")
+
+    def test_setup_problems(self):
+        with mock.patch.dict(os.environ, {"RNSMOKE_GOOGLE_CLIENT_ID": "", "RNSMOKE_GOOGLE_CLIENT_SECRET": ""}):
+            with self.assertRaises(UserError):
+                gdrive.load_client()
+        gdrive.TOKEN_FILE.unlink()
+        with self.assertRaises(UserError):
+            gdrive.access_token(interactive=False)
+        gdrive._save_token({"refresh_token": "rt-1", "expires_at": 0})
+        with mock.patch.object(gdrive, "_http", side_effect=urllib.error.URLError("offline")):
+            self.assertEqual(upload.upload_evidence(self.run_dir, self.runs, "gdrive"), {})   # local links kept
+
+
+class FakeRclone:
+    """Stands in for the rclone binary (upload._rclone_cmd)."""
+
+    def __init__(self):
+        self.calls, self.files, self.ready = [], {}, True
+
+    def __call__(self, args, timeout=300):
+        self.calls.append(list(args))
+        cmd = args[0]
+        if cmd == "config" and args[1] == "dump":
+            remote = {"type": "drive", "scope": "drive.file"}
+            if self.ready:
+                remote["token"] = '{"access_token":"x"}'
+            return 0, json.dumps({"rnsmoke-gdrive": remote}), ""
+        if cmd == "mkdir":
+            return 0, "", ""
+        if cmd == "copyto":
+            self.files.setdefault(args[2], f"fileid{len(self.files) + 1}")    # overwrite keeps the same id
+            return 0, "", ""
+        if cmd == "lsjson":
+            target = args[-1]
+            if target in self.files:
+                return 0, json.dumps({"ID": self.files[target], "IsDir": False}), ""
+            return 0, json.dumps({"ID": "folderid", "IsDir": True}), ""
+        if cmd == "link":
+            return 0, "https://drive.google.com/drive/folders/folderid?usp=sharing\n", ""
+        return 1, "", f"unexpected {cmd}"
+
+
+class RcloneTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.run_dir = Path(self.tmp.name) / "runs" / "2026-10-27_140158"
+        for rel in ("evidence/ios/tc-004.png", "evidence/android/tc-004.png"):
+            (self.run_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.run_dir / rel).write_bytes(rel.encode())
+        (self.run_dir / "cases.json").write_text(json.dumps({"source": {"path": "/x/[App - D1] Smoke testing.xlsx"}}))
+        self.runs = [{"platform": "ios", "results": {"k": {"evidence": "evidence/ios/tc-004.png"}}},
+                     {"platform": "android", "results": {"k": {"evidence": "evidence/android/tc-004.png"}}}]
+        self.rclone = FakeRclone()
+        self.real_rclone_cmd = upload._rclone_cmd
+        patcher = mock.patch.object(upload, "_rclone_cmd", self.rclone)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_private_upload_with_drive_links(self):
+        links = upload.upload_evidence(self.run_dir, self.runs, "rclone")
+        self.assertEqual(sorted(links.values()), ["https://drive.google.com/file/d/fileid1/view",
+                                                  "https://drive.google.com/file/d/fileid2/view"])
+        folder = "rnsmoke-gdrive:RN smoke evidence/[App - D1] Smoke testing/2026-10-27_140158"
+        self.assertIn(["mkdir", folder], self.rclone.calls)
+        self.assertIn(["copyto", str(self.run_dir / "evidence/ios/tc-004.png"), f"{folder}/ios-tc-004.png"],
+                      self.rclone.calls)
+        self.assertFalse(any(c[0] == "link" for c in self.rclone.calls))            # private by default
+        calls = len(self.rclone.calls)
+        upload.upload_evidence(self.run_dir, self.runs, "rclone")
+        self.assertEqual(len(self.rclone.calls), calls)                             # cached
+        (self.run_dir / "evidence/ios/tc-004.png").write_bytes(b"retaken")
+        again = upload.upload_evidence(self.run_dir, self.runs, "rclone")
+        self.assertEqual(again, links)                                              # same path -> same link
+
+    def test_share_and_setup_errors(self):
+        upload.upload_evidence(self.run_dir, self.runs, "rclone", share="anyone")
+        self.assertTrue(any(c[0] == "link" for c in self.rclone.calls))
+        with self.assertRaises(UserError):
+            upload.upload_evidence(self.run_dir, self.runs, "rclone", share="domain", force=True)
+        self.rclone.ready = False
+        with self.assertRaises(UserError):                                          # rclone-setup not done
+            upload.upload_evidence(self.run_dir, self.runs, "rclone", force=True)
+
+    def test_missing_binary(self):
+        with mock.patch.object(upload.shutil, "which", return_value=None):
+            with self.assertRaises(UserError):
+                self.real_rclone_cmd(["listremotes"])
 
 
 class RunnerHelperTests(unittest.TestCase):

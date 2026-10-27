@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -303,6 +304,82 @@ def cmd_set_result(args) -> int:
     return 0
 
 
+def cmd_rclone_setup(args) -> int:
+    import shutil
+    import subprocess
+
+    from . import upload
+
+    binary = shutil.which("rclone")
+    if not binary:
+        raise UserError("rclone is not installed: brew install rclone  (or https://rclone.org/install/)")
+    remote = args.remote
+    if upload.rclone_remote_ready(remote) and not args.reconnect:
+        print(f"rclone remote '{remote}:' is already set up (use --reconnect to sign in again).")
+        return 0
+    print("A browser window will open: sign in with your company Google account and click Allow.\n"
+          "(rclone's own Google app, scope drive.file = only files rclone creates; no admin setup needed)")
+    cmd = ([binary, "config", "reconnect", f"{remote}:"] if upload.rclone_remote_ready(remote)
+           else [binary, "config", "create", remote, "drive", "scope=drive.file"])
+    proc = subprocess.run(cmd, timeout=900)
+    if proc.returncode != 0 or not upload.rclone_remote_ready(remote):
+        raise UserError("rclone setup did not complete (browser sign-in cancelled or blocked)")
+    code, out, err = upload._rclone_cmd(["lsd", f"{remote}:"], timeout=120)
+    if code != 0:
+        raise UserError(f"rclone cannot reach Google Drive: {short(err or out, 300)}")
+    print(f"Google Drive connected through rclone remote '{remote}:'. Use: rnsmoke export --upload rclone")
+    return 0
+
+
+def cmd_drive_login(args) -> int:
+    from . import gdrive
+
+    client_file = args.client_file
+    if not client_file:
+        try:
+            gdrive.load_client()
+        except UserError:
+            downloaded = gdrive.find_downloaded_client()
+            if not downloaded:
+                raise
+            print(f"Using the OAuth client downloaded at {downloaded}")
+            client_file = str(downloaded)
+    if client_file:
+        print(f"OAuth client saved to {gdrive.import_client(Path(client_file))}")
+    record = gdrive.login(open_browser=not args.no_browser)
+    print(f"Signed in to Google Drive as {record.get('account')} (scope: drive.file)")
+    return 0
+
+
+def cmd_upload(args) -> int:
+    from . import upload
+
+    ws = _ws(args)
+    if args.list_hosts:
+        for name, host in upload.HOSTS.items():
+            print(f"{name:<10} {host.summary}")
+        return 0
+    run_dir = ws.resolve_run_dir(args.run_dir)
+    runs = _load_runs(run_dir)
+    if args.platforms:
+        runs = [r for r in runs if r.get("platform") in _csv(args.platforms)]
+    if args.dry_run:
+        plan = upload.plan_uploads(run_dir, runs, args.host)
+        for item in plan:
+            print(f"{item['action'][:60]:<60} {item['bytes'] / 1024:>8.0f} KB  {item['file']}")
+        todo = [i for i in plan if i["action"] == "upload"]
+        print(f"\n{len(todo)} file(s), {sum(i['bytes'] for i in todo) / 1048576:.1f} MB would be uploaded to "
+              f"{args.host} - anyone allowed by that host's link settings can open them: "
+              f"{upload.HOSTS[args.host].summary}")
+        return 0
+    links = upload.upload_evidence(run_dir, runs, args.host, expire=args.expire, force=args.force,
+                                   share=args.share)
+    for rel, url in links.items():
+        print(f"{rel}\t{url}")
+    print(f"Cached in {run_dir / upload.CACHE_FILE}; `rnsmoke export --upload {args.host}` reuses these links.")
+    return 0
+
+
 def cmd_export(args) -> int:
     from . import report
 
@@ -314,9 +391,15 @@ def cmd_export(args) -> int:
         runs = [r for r in runs if r.get("platform") in _csv(args.platforms)]
     run_date = dt.date.fromisoformat(args.date) if args.date else None
     tester = args.tester or f"Maestro automation ({git_user_name()})".replace(" ()", "")
+    links = None
+    if args.upload:
+        from . import upload
+
+        links = upload.upload_evidence(run_dir, runs, args.upload, expire=args.expire, share=args.share)
     result = report.export(cases_doc, runs, run_dir, input_path=args.input, out_path=args.out,
                            tab_name=args.tab_name, tester=tester, build=args.build, run_date=run_date,
-                           fill_ids=not args.no_fill_ids, only_new_tab=args.only_new_tab, also_xls=args.xls)
+                           fill_ids=not args.no_fill_ids, only_new_tab=args.only_new_tab, also_xls=args.xls,
+                           links=links)
     check = report.verify(Path(result["output"]), result["sheet"], cases_doc)
     if check != result["counts"]:
         warn(f"Verification mismatch: wrote {result['counts']} but read back {check}")
@@ -325,6 +408,8 @@ def cmd_export(args) -> int:
         print(f"XLS   : {result['xls']}")
     print(f"Tab   : '{result['sheet']}' (cloned from '{result['source_sheet']}')")
     print("Result: " + ", ".join(f"{k}={v}" for k, v in sorted(result["counts"].items())))
+    if result.get("evidence_links"):
+        print("Evidence links: " + ", ".join(f"{k}={v}" for k, v in sorted(result["evidence_links"].items())))
     if result["summary_cells"]:
         print("Summary cells: " + "; ".join(result["summary_cells"]))
     return 0
@@ -430,6 +515,30 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run-dir", default="latest")
     p.set_defaults(func=cmd_set_result)
 
+    p = sub.add_parser("rclone-setup", help="one-time Google Drive sign-in through rclone (no admin setup)")
+    p.add_argument("--remote", default=os.environ.get("RNSMOKE_RCLONE_REMOTE", "rnsmoke-gdrive"))
+    p.add_argument("--reconnect", action="store_true", help="sign in again (expired / other account)")
+    p.set_defaults(func=cmd_rclone_setup)
+
+    p = sub.add_parser("drive-login", help="one-time Google sign-in for --upload gdrive (scope: drive.file)")
+    p.add_argument("--no-browser", action="store_true", help="only print the sign-in URL")
+    p.add_argument("--client-file", help="company 'Desktop app' OAuth client JSON to install first")
+    p.set_defaults(func=cmd_drive_login)
+
+    p = sub.add_parser("upload", help="upload evidence (gdrive, or a public free host) and cache the URLs")
+    p.add_argument("--run-dir", default="latest")
+    p.add_argument("--host", default="gdrive",
+                   help="gdrive (default, Google Drive with your OAuth client) | rclone | droplr | catbox | "
+                        "litterbox | imgbb")
+    p.add_argument("--expire", help="litterbox: 1h|12h|24h|72h; imgbb: e.g. 30d")
+    p.add_argument("--share", choices=("none", "domain", "anyone"), default="none",
+                   help="gdrive: also share the run folder (default: private)")
+    p.add_argument("--platforms", help="limit to ios / android evidence")
+    p.add_argument("--force", action="store_true", help="upload again even if a cached link exists")
+    p.add_argument("--dry-run", action="store_true", help="list what would be published; no network")
+    p.add_argument("--list-hosts", action="store_true")
+    p.set_defaults(func=cmd_upload)
+
     p = sub.add_parser("export", help="write the Excel report with a new dated tab")
     p.add_argument("--run-dir", default="latest")
     p.add_argument("--input", help="original .xlsx/.csv (default: the parsed source)")
@@ -442,6 +551,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-fill-ids", action="store_true", help="do not write TC-xxx into an empty Test ID column")
     p.add_argument("--only-new-tab", action="store_true", help="write a workbook containing only the new tab")
     p.add_argument("--xls", action="store_true", help="also convert to legacy .xls (needs LibreOffice)")
+    p.add_argument("--upload", metavar="HOST", help="upload evidence to HOST (rclone | gdrive | droplr | catbox | litterbox "
+                                                    "| imgbb) and put the URLs in the IOS / ANDROID cells")
+    p.add_argument("--expire", help="with --upload: litterbox 1h|12h|24h|72h, imgbb e.g. 30d")
+    p.add_argument("--share", choices=("none", "domain", "anyone"), default="none",
+                   help="with --upload gdrive: share the run folder (default: private)")
     p.set_defaults(func=cmd_export)
     return parser
 

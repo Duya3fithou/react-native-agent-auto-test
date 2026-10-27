@@ -47,8 +47,9 @@ between Bash calls — repeat the `RNSMOKE=...` assignment (or use the full path
 5. **No secrets in flows.** Credentials and test data live in `.maestro/smoke/.env` and are referenced
    as `${VAR}`; never echo their values back.
 6. **No irreversible side effects without explicit approval:** real purchases, deleting/cancelling
-   accounts or memberships, messaging real people, creating data in production. Mark such cases
-   `manual` (or ask once). Test against dev/staging builds unless the user says otherwise.
+   accounts or memberships, messaging real people, creating data in production, publishing evidence
+   to a public file host. Mark such cases `manual` (or ask once). Test against dev/staging builds
+   unless the user says otherwise.
 7. **Ask once, then run autonomously.** Collect missing inputs in a single question round at the
    start; afterwards keep going and post short progress updates (section done, X/Y passing).
 8. Never overwrite the user's input file; never hand-edit `results-*.json` or `cases.json`.
@@ -164,6 +165,22 @@ one consistent run.
 `--only-new-tab` writes a workbook with just the dated tab (easy "Import → Insert new sheet" into
 Google Sheets); `--xls` additionally converts to legacy .xls via LibreOffice. The command re-reads the
 file and prints the counts. Stop Metro if you started it.
+
+Shareable evidence links (only when the user asks for them). Use the company's **Google Drive** with the
+team's own OAuth client: private by default, least-privilege `drive.file`, deletable. The tool signs in by
+itself (browser on first use — tell the user to expect it; token stored and refreshed automatically). The
+client is bundled as `google-oauth-client.json` in this skill, or `"$RNSMOKE" drive-login` picks up a
+downloaded `client_secret_*.json` from ~/Downloads (README explains how to create one in ~10 minutes).
+```bash
+"$RNSMOKE" -C <project> upload --dry-run                      # what would be uploaded (no network)
+"$RNSMOKE" -C <project> export --upload gdrive                # private: owner + people the folder is shared with
+"$RNSMOKE" -C <project> export --upload gdrive --share domain # whole company can view (only if the user wants it)
+```
+Alternatives: `--upload rclone` (rclone's shared Google client is being retired in 2026). Public free hosts
+(`catbox`, `litterbox --expire 72h`, `imgbb`) and the experimental `droplr` publish client screenshots — only
+on explicit request; never `--share anyone` on your own initiative. URLs replace the local paths in the
+IOS / ANDROID cells; links are cached in `runs/<stamp>/uploads.json`; a failed upload keeps the local link.
+Tell the user where the files went and who can open them.
 
 Final message to the user, in their language: output path (and that evidence links are relative to
 it — share the whole run folder), PASS / FAIL / PENDING counts, each FAIL with a one-line reason and

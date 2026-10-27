@@ -26,6 +26,20 @@
 | Export: "sheet changed since it was parsed" | the input file was edited after `cases` | re-run `rnsmoke cases --input ...` then `run` |
 | Excel opens on an old tab | — | `export` sets the new tab active; Google Sheets import: use `--only-new-tab` |
 | Need `.xls` (Excel 97-2003) | — | `export --xls` (needs LibreOffice: `brew install --cask libreoffice`) |
+| `upload failed ... keeping the local link` | host unreachable / blocked by the network, file too big | retry later, try another `--host` (litterbox, imgbb), or share the run folder instead |
+| Evidence links stopped working | litterbox / imgbb expiry reached | re-run `export --upload <host>` (expired links are uploaded again) or use catbox |
+| `rclone remote 'rnsmoke-gdrive:' is not set up yet` | first use on this machine | `brew install rclone` then `rnsmoke rclone-setup` |
+| rclone sign-in shows "This app is blocked" / access denied | the Workspace admin restricts third-party apps | use `--upload gdrive` with the company's own OAuth client |
+| Google shows "500. That's an error" / "Something went wrong" during `rclone-setup` | Google-side OAuth hiccup; some browsers fail | keep the setup running and open the printed `http://127.0.0.1:53682/auth?...` link in Chrome or an incognito window; if it persists use `--upload gdrive` |
+| rclone sign-in or uploads stop working later in 2026 | rclone's shared Google client is being retired (Google starts charging for it) | give rclone your own client (`client_id`/`client_secret`, then `rclone config reconnect rnsmoke-gdrive:`) or switch to `--upload gdrive` |
+| rclone uploads fail with `invalid_grant` / token expired | token revoked or password changed | `rnsmoke rclone-setup --reconnect` |
+| `No Google OAuth client configured` | the company's Desktop-app client JSON is neither bundled nor installed | `rnsmoke drive-login --client-file <file.json>`, or bundle it in the private repo (README: Google Drive) |
+| `Not signed in to Google Drive` / sign-in timed out | no token yet, or the browser step was not finished | `rnsmoke drive-login` (add `--no-browser` to print the URL) |
+| `Drive API 403` | Drive API not enabled in the Cloud project, or the consent screen is not Internal/Testing for this user | enable "Google Drive API"; add the user to the OAuth app (Internal for Workspace) |
+| Teammates cannot open the Drive links | the run folder is private (default) | share `RN smoke evidence` once with the team, or export with `--share domain` |
+| `--share domain needs a Google Workspace account` | personal Gmail accounts cannot share to a domain | share the folder with people/groups in Drive instead |
+| `Droplr refused the credentials (HTTP 401)` | wrong email/password, or a Google/SSO-only account | set a Droplr password or use `DROPLR_TOKEN`; never put credentials in `.maestro/smoke/.env` (that file is passed to Maestro) |
+| `Droplr answered without a shortlink` | the Droplr API changed (client is based on the droplr-js SDK) | the cell keeps its local link; report the listed fields so the parser in `upload.py` can be adapted |
 
 Logs: `runs/<stamp>/logs/<platform>/*.log` (Maestro output), raw artifacts under
 `runs/<stamp>/maestro/<platform>/<batch>/<timestamp>/<flow name>/` (commands.json, screen-hierarchy,

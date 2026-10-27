@@ -60,9 +60,56 @@ Trong tab mới:
 | **Test ID** | Điền `TC-001...` nếu cột đang trống (để đối chiếu với evidence) |
 | Khối summary | Tested by, Test Date, Build version (lấy từ app đã cài), số Pass / Fail / Pending, tổng số case |
 
-> Link evidence là đường dẫn tương đối — khi gửi cho người khác hãy gửi **cả thư mục run** (hoặc zip lại).
+> Mặc định link evidence là đường dẫn tương đối — khi gửi cho người khác hãy gửi **cả thư mục run** (hoặc zip lại),
+> hoặc dùng link công khai (mục dưới).
 > Muốn import vào Google Sheets: `rnsmoke export --only-new-tab` rồi *File → Import → Insert new sheet(s)*.
 > Cần đúng định dạng `.xls` (Excel 97-2003): `rnsmoke export --xls` (cần LibreOffice).
+
+### Link evidence cho cả team — Google Drive (khuyên dùng)
+
+Ảnh/video evidence được upload lên **Google Drive của người chạy** (`RN smoke evidence/<tên sheet>/<run>`), link
+`drive.google.com/file/d/...` được ghi vào từng ô cột IOS / ANDROID (giống sheet cũ).
+
+- **Quyền tối thiểu `drive.file`**: công cụ chỉ thấy file do nó tạo, không đọc được gì khác trong Drive.
+- **Mặc định riêng tư**: chỉ bạn + người được share thư mục xem được (share `RN smoke evidence` cho team một lần là xong);
+  `--share domain` = cả công ty xem được (chỉ đọc).
+- Đăng nhập OAuth do công cụ tự làm (trình duyệt, PKCE); token tự lưu ở `~/.rnsmoke/google-token.json` (quyền 600)
+  và tự gia hạn. Gỡ quyền tại myaccount.google.com/permissions.
+
+**Tạo OAuth client — 1 lần cho cả team, ai làm cũng được (~10 phút, không cần quyền admin Workspace)**
+1. Tạo project: <https://console.cloud.google.com/projectcreate> (tên tuỳ ý, ví dụ `rnsmoke`).
+2. Bật Drive API: <https://console.cloud.google.com/apis/library/drive.googleapis.com> → **Enable**.
+3. Màn hình đồng ý: <https://console.cloud.google.com/auth/overview> → *Get started* → App name `rnsmoke`, email hỗ trợ →
+   Audience **Internal** (tài khoản Google Workspace công ty) → email liên hệ → *Create*.
+   Nếu không có lựa chọn Internal: chọn **External**, rồi ở *Audience* bấm **Publish app** (quyền `drive.file` không cần
+   Google duyệt; nếu để chế độ *Testing* thì token tự hết hạn sau 7 ngày).
+4. Tạo client: <https://console.cloud.google.com/auth/clients/create> → Application type **Desktop app** → *Create* →
+   **Download JSON** (file `client_secret_….json` nằm trong Downloads).
+
+**Dùng**
+```bash
+R=~/tools/rn-maestro-smoke/skills/rn-smoke-test/bin/rnsmoke
+$R drive-login                                           # tự tìm client_secret_*.json trong Downloads → trình duyệt → Allow
+$R -C <project> upload --dry-run                         # xem trước file nào sẽ được upload (không gọi mạng)
+$R -C <project> export --upload gdrive                   # Excel với link Drive trong cột IOS / ANDROID (riêng tư)
+$R -C <project> export --upload gdrive --share domain    # cả công ty mở được link
+```
+`drive-login` tự tìm client theo thứ tự: `~/.rnsmoke/`, `skills/rn-smoke-test/google-oauth-client.json`,
+`resource/client_secret_*.json` trong repo, rồi `~/Downloads/client_secret_*.json`.
+Cho cả team khỏi phải chuyền file: lưu client thành `skills/rn-smoke-test/google-oauth-client.json` rồi `git add -f`
+vào **repo private** (`.gitignore` chặn file này mặc định; Google không coi client secret của app Desktop là bí mật).
+Link được cache trong `runs/<ngày_giờ>/uploads.json` nên export lại không upload trùng; nếu Drive lỗi, ô đó giữ link
+cục bộ và file Excel vẫn được tạo.
+
+<details>
+<summary>Phương án khác: rclone, host công khai</summary>
+
+- `--upload rclone` (sau `brew install rclone` + `rnsmoke rclone-setup`): cùng cấu trúc thư mục Drive. Client Google dùng
+  chung của rclone đang bị ngừng trong năm 2026 (Google tính phí) và có thể lỗi đăng nhập (Google 500) — nên cấu hình rclone
+  với client riêng.
+- Host công khai miễn phí — **không dùng cho app khách hàng**: `catbox` (vĩnh viễn, upload ẩn danh không xoá được),
+  `litterbox --expire 72h` (tự xoá), `imgbb` (cần `IMGBB_API_KEY`), `droplr` (thử nghiệm, SDK cũ chưa kiểm chứng).
+</details>
 
 ## 3. Yêu cầu máy
 
@@ -136,6 +183,9 @@ $R -C <project> metro start --prewarm ios         # cho bản debug
 $R -C <project> run --platform ios                # chạy (batch 10 flow, tự retry flow lỗi)
 $R -C <project> results                           # tóm tắt fail/error kèm evidence
 $R -C <project> export                            # xuất Excel với tab DDMM
+$R -C <project> upload --dry-run                  # xem trước evidence nào sẽ bị công khai
+$R drive-login                                    # 1 lần: đăng nhập Google Drive (OAuth client của team)
+$R -C <project> export --upload gdrive            # xuất Excel với link evidence trên Google Drive
 ```
 
 ## 8. Giới hạn cần biết
