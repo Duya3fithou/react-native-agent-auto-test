@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# rnsmoke - Maestro smoke tests for React Native + Excel report.
+# Uses python3 when it already has openpyxl; otherwise bootstraps a private venv in ~/.rnsmoke/venv.
+set -euo pipefail
+
+SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"
+PY="${RNSMOKE_PYTHON:-}"
+
+if [ -z "$PY" ]; then
+  if python3 -c 'import sys, openpyxl; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
+    PY="python3"
+  else
+    VENV="${RNSMOKE_HOME:-$HOME/.rnsmoke}/venv"
+    if [ ! -x "$VENV/bin/python" ] || ! "$VENV/bin/python" -c 'import openpyxl' >/dev/null 2>&1; then
+      echo "rnsmoke: setting up Python environment in $VENV (one time)..." >&2
+      python3 -m venv "$VENV"
+      "$VENV/bin/python" -m pip install --quiet --upgrade pip >&2
+      "$VENV/bin/python" -m pip install --quiet "openpyxl>=3.1" >&2
+    fi
+    PY="$VENV/bin/python"
+  fi
+fi
+
+export PATH="$PATH:$HOME/.maestro/bin"
+export PYTHONDONTWRITEBYTECODE=1
+PYTHONPATH="$SCRIPTS${PYTHONPATH:+:$PYTHONPATH}" exec "$PY" -m rnsmoke "$@"

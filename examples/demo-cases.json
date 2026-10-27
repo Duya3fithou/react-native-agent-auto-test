@@ -1,0 +1,10 @@
+[
+  {"section": "Onboarding", "description": "Open the app for the first time", "expected": "The onboarding carousel is displayed with a \"Get started\" button"},
+  {"section": "Registration", "description": "Register without filling First name and Last name", "expected": "\"First name is required\" message appears\n\"Last name is required\" message appears"},
+  {"section": "Registration", "description": "Register with a password and confirm password that do not match", "expected": "\"Passwords do not match\" message is displayed"},
+  {"section": "Login", "description": "Login with valid credentials", "expected": "Logged in and the Home screen is displayed", "test_data": "TEST_EMAIL / TEST_PASSWORD"},
+  {"section": "Login", "description": "Login with a valid email but an incorrect password", "expected": "\"Invalid credentials\" message is displayed", "test_data": "TEST_EMAIL"},
+  {"section": "Forgot password", "description": "Request a reset code for a registered email", "expected": "Receive the confirmation code email and the code entry screen is displayed"},
+  {"section": "Home", "description": "Home screen for a logged-in user", "expected": "1. Greeting with the user's first name\n2. Upcoming bookings section\n3. News section with a \"View all\" button"},
+  {"section": "Profile - Logout", "description": "Log out from the Profile tab", "expected": "The login screen is displayed and the session is cleared"}
+]

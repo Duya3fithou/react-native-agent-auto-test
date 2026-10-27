@@ -1,0 +1,18 @@
+# Taps away OS permission prompts if they show up (notifications, location, tracking...).
+# Safe to call at any point:   - runFlow: ../../subflows/dismiss-system-dialogs.yaml
+appId: ${APP_ID}
+---
+- runFlow:
+    when:
+      visible: "Allow|Allow While Using App|Allow Once|While using the app|OK"
+    commands:
+      - tapOn:
+          text: "Allow|Allow While Using App|While using the app|Allow Once|OK"
+          optional: true
+- runFlow:
+    when:
+      visible: "Ask App Not to Track"
+    commands:
+      - tapOn:
+          text: "Ask App Not to Track"
+          optional: true

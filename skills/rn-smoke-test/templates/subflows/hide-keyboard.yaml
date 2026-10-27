@@ -1,0 +1,31 @@
+# Close the soft keyboard. Call it RIGHT AFTER inputText, while the keyboard is open.
+#  - Android: Back closes the keyboard. (Back with no keyboard open navigates to the previous
+#    screen - which is exactly what Maestro's hideKeyboard does, so never use it elsewhere.)
+#  - iOS: hideKeyboard is unreliable and the return key often just focuses the next field, so tap a
+#    static, non-interactive text ABOVE the focused field (its label is ideal; a title works too).
+#    Inside a ScrollView React Native then blurs the input and closes the keyboard.
+# Never scroll with the keyboard open: swipes landing on it type words (gesture typing).
+# Usage:
+#   - inputText: "Smoke"
+#   - runFlow:
+#       file: ../../subflows/hide-keyboard.yaml
+#       env:
+#         TAP_TO_DISMISS: "First name"     # used on iOS only
+appId: ${APP_ID}
+---
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - pressKey: Back
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      # The keyboard-avoiding scroll is still animating right after typing; tapping now would use
+      # stale coordinates and hit a key (seen: "Smoke" became "Smokeg").
+      - waitForAnimationToEnd:
+          timeout: 3000
+      - tapOn: ${TAP_TO_DISMISS}
+- waitForAnimationToEnd:
+    timeout: 2000

@@ -1,0 +1,6 @@
+{
+  "name": "rn-maestro-smoke",
+  "version": "1.0.0",
+  "description": "Maestro smoke tests for React Native apps, reported back into the team's Excel test-case sheet as a new dated tab with the identical layout.",
+  "keywords": ["react-native", "maestro", "e2e", "smoke-test", "qa", "excel", "test-cases"]
+}

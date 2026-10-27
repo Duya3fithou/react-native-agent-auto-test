@@ -1,0 +1,17 @@
+# Fresh start: wipes app data + keychain so every case starts logged out.
+# Use from a case flow:   - runFlow: ../../subflows/launch-clean.yaml
+# TODO (per app): replace FIRST_SCREEN_TEXT with text that is always on the first screen,
+# e.g. "GET STARTED" or "Sign in" (check with `rnsmoke inspect`).
+appId: ${APP_ID}
+---
+- launchApp:
+    appId: ${APP_ID}
+    clearState: true
+    clearKeychain: true
+    permissions:
+      all: allow
+# Debug builds load JS from Metro on first launch - allow plenty of time.
+- extendedWaitUntil:
+    visible: "FIRST_SCREEN_TEXT"
+    timeout: 90000
+- runFlow: dismiss-dev-overlays.yaml

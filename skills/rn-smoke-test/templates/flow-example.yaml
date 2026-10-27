@@ -1,0 +1,33 @@
+# EXAMPLE - one flow per test case. Copy to flows/<section-slug>/<case-slug>.yaml and adapt.
+#
+# Case     : TC-009
+# Section  : Login
+# Steps    : Login with a valid email but an incorrect password
+# Expected : "Invalid credentials" popup appears at the top of screen
+#
+# Conventions
+#  - appId always ${APP_ID}; test data from .env as ${TEST_EMAIL} etc. (never literal credentials)
+#  - start from a known state with subflows (launch-clean, go-to-..., login)
+#  - one assertion per observable claim in "Expected result"; prove it is caused by the action
+#  - end with `takeScreenshot: evidence` while the expected result is on screen
+# Link it:  rnsmoke mark TC-009 --flow flows/login/wrong-password.yaml --requires TEST_EMAIL
+appId: ${APP_ID}
+name: "Login - valid email, wrong password"
+tags:
+  - smoke
+  - login
+---
+- runFlow: ../../subflows/launch-clean.yaml
+- runFlow: ../../subflows/go-to-login.yaml          # app specific, written while exploring
+- tapOn: "Password"
+- inputText: "definitely-Wrong-123!"
+- runFlow:
+    file: ../../subflows/hide-keyboard.yaml
+    env:
+      TAP_TO_DISMISS: "SIGN IN"                     # a static title on this screen
+- assertNotVisible: "(?i)invalid credentials.*"     # not shown before the action
+- tapOn: "Sign in"
+- extendedWaitUntil:                                # toasts are short-lived: assert right away
+    visible: "(?i)invalid credentials.*"
+    timeout: 10000
+- takeScreenshot: evidence

@@ -1,0 +1,21 @@
+﻿Name,Demo App Smoke Test Checklist,,,,,,,,,,
+Test cases Version,v1.0,,,,,,,,,,
+Sprint,,All Cases,,,,,,,,,
+Build version,,,,,,,,,,,
+Pre-condition,,,,,,,,,,,
+Pass Cases,,Unavailable Cases,,,,,,,,,
+,,Fail Cases,,,,,,,,,
+Tested by,,,,,,,,,,,
+Test Date,,,,,,,,,,,
+Test ID,Platform,Section,Description,Expected result,Actual result,Result,IOS,ANDROID,Test data,Note,Tester
+,App / iOS / ANDROID,Onboarding,Open the app for the first time,"The onboarding carousel is displayed with a ""Get started"" button",,,,,,,
+,App / iOS / ANDROID,Registration,Register without filling First name and Last name,"""First name is required"" message appears
+""Last name is required"" message appears",,,,,,,
+,App / iOS / ANDROID,Registration,Register with a password and confirm password that do not match,"""Passwords do not match"" message is displayed",,,,,,,
+,App / iOS / ANDROID,Login,Login with valid credentials,Logged in and the Home screen is displayed,,,,,TEST_EMAIL / TEST_PASSWORD,,
+,App / iOS / ANDROID,Login,Login with a valid email but an incorrect password,"""Invalid credentials"" message is displayed",,,,,TEST_EMAIL,,
+,App / iOS / ANDROID,Forgot password,Request a reset code for a registered email,Receive the confirmation code email and the code entry screen is displayed,,,,,,,
+,App / iOS / ANDROID,Home,Home screen for a logged-in user,"1. Greeting with the user's first name
+2. Upcoming bookings section
+3. News section with a ""View all"" button",,,,,,,
+,App / iOS / ANDROID,Profile - Logout,Log out from the Profile tab,The login screen is displayed and the session is cleared,,,,,,,

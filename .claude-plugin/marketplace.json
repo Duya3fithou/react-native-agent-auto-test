@@ -1,0 +1,18 @@
+{
+  "name": "rn-maestro-smoke",
+  "owner": {
+    "name": "QA Automation"
+  },
+  "metadata": {
+    "description": "Claude Code skill: automated React Native smoke testing with Maestro + Excel report.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "rn-maestro-smoke",
+      "description": "Run a React Native smoke test with Maestro from an existing test-case sheet (.xlsx/.csv) or from generated cases, and export the results as a new dated tab (DDMM) with the same layout as the input.",
+      "source": "./",
+      "skills": ["./skills/rn-smoke-test"]
+    }
+  ]
+}

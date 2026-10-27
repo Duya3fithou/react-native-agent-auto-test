@@ -1,0 +1,44 @@
+# Scroll until ${TARGET} is visible, swiping along the left margin (x = 8%) instead of the screen
+# centre. Maestro's scrollUntilVisible always swipes from the centre, and on Android a swipe that
+# starts on a single-line TextInput that already holds text does NOT scroll the parent ScrollView
+# (the input claims the gesture). Adjust 8% if your screen has interactive elements at the edge.
+# Close the keyboard first (hide-keyboard subflow): swipes landing on it would type words.
+# Usage:
+#   - runFlow:
+#       file: ../../subflows/scroll-until-visible.yaml
+#       env:
+#         TARGET: "CREATE ACCOUNT"      # text / regex
+#         DIRECTION: DOWN               # DOWN reveals content below (default), UP reveals content above
+appId: ${APP_ID}
+---
+- runFlow:
+    when:
+      true: ${DIRECTION == 'UP'}
+    commands:
+      - repeat:
+          while:
+            notVisible: ${TARGET}
+          times: 12
+          commands:
+            - swipe:
+                start: 8%, 30%
+                end: 8%, 70%
+                duration: 500
+            - waitForAnimationToEnd:
+                timeout: 1500
+- runFlow:
+    when:
+      true: ${DIRECTION != 'UP'}
+    commands:
+      - repeat:
+          while:
+            notVisible: ${TARGET}
+          times: 12
+          commands:
+            - swipe:
+                start: 8%, 70%
+                end: 8%, 30%
+                duration: 500
+            - waitForAnimationToEnd:
+                timeout: 1500
+- assertVisible: ${TARGET}

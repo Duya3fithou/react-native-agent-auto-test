@@ -1,0 +1,15 @@
+# Debug builds only: closes React Native LogBox toasts ("Open debugger to view warnings/errors.")
+# that sit on top of bottom buttons. Taps the close (x) at the right end of the toast.
+# Call after launch and before tapping anything near the bottom of the screen.
+appId: ${APP_ID}
+---
+- repeat:
+    while:
+      visible: ".*Open debugger to view (warnings|errors).*"
+    times: 5
+    commands:
+      - tapOn:
+          text: ".*Open debugger to view (warnings|errors).*"
+          point: "94%,50%"
+      - waitForAnimationToEnd:
+          timeout: 1500

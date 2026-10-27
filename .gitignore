@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+.idea/
+.vscode/
+
+# keep customer test-case sheets and run results out of this repo
+*.xlsx
+*.csv
+!examples/*.csv
+!examples/*.xlsx
+runs/
