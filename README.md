@@ -1,216 +1,224 @@
 # rn-maestro-smoke
 
-Skill cho **Claude Code** để chạy **smoke test tự động** cho app **React Native** bằng **Maestro**,
-rồi xuất kết quả ra **file Excel** có thêm **1 tab mới đặt tên theo ngày test** (`DDMM`, ví dụ `2710`),
-định dạng y hệt sheet test case gốc (`Test ID | Platform | Section | Description | Expected result |
-Actual result | Result | IOS | ANDROID | Test data | Note | Tester`).
+**English** | [Tiếng Việt](README.vi.md)
 
-Bạn chỉ cần đưa cho Claude: **link repo này**, **source code React Native**, và **file test case**
-(`.xlsx`, `.csv` export từ Google Sheets, hoặc không có gì — Claude sẽ tự sinh test case từ code).
+A **Claude Code** skill that runs **automated smoke tests** for **React Native** apps with **Maestro** and
+exports the results to an **Excel file** with **one new tab named after the test date** (`DDMM`, e.g. `2710`),
+in exactly the same layout as your original test-case sheet (`Test ID | Platform | Section | Description |
+Expected result | Actual result | Result | IOS | ANDROID | Test data | Note | Tester`).
+
+All you give Claude is: **the link to this repo**, **the React Native source code**, and **the test-case file**
+(`.xlsx`, a `.csv` exported from Google Sheets, or nothing at all — Claude then generates test cases from the code).
 
 ```
-Test case (.xlsx/.csv) ──► Claude đọc case + code app ──► viết Maestro flow cho từng case
-        │                                                        │
-        └──────── file Excel + tab "DDMM" ◄── kết quả + ảnh evidence ◄── chạy trên Simulator/Emulator
+Test cases (.xlsx/.csv) ──► Claude reads the cases + app code ──► writes one Maestro flow per case
+        │                                                                  │
+        └──────── Excel file + "DDMM" tab ◄── results + evidence screenshots ◄── runs on Simulator/Emulator
 ```
 
 ---
 
-## 1. Cách dùng nhanh (khuyên dùng)
+## 1. Quick start (recommended)
 
-Mở Claude Code ở bất kỳ đâu và dán prompt (thay đường dẫn cho đúng):
+Open Claude Code anywhere and paste a prompt (adjust the paths):
 
 ```text
-Clone https://github.com/<your-org>/rn-maestro-smoke về ~/tools/rn-maestro-smoke rồi chạy ./install.sh.
-Sau đó dùng skill rn-smoke-test để chạy smoke test cho app React Native ở ~/projects/my-app
-với file test case "~/Downloads/[App - MyApp] Smoke testing.xlsx" trên iOS simulator.
-Tài khoản test: email ... / mật khẩu ... (nếu có).
+Clone https://github.com/<your-org>/rn-maestro-smoke into ~/tools/rn-maestro-smoke and run ./install.sh.
+Then use the rn-smoke-test skill to smoke test the React Native app in ~/projects/my-app
+with the test-case file "~/Downloads/[App - MyApp] Smoke testing.xlsx" on the iOS simulator.
+Test account: email ... / password ... (if any).
 ```
 
-Các biến thể:
+Variations:
 
-| Trường hợp | Prompt |
+| Situation | Prompt |
 |---|---|
-| File `.csv` export từ Google Sheets | `... với file test case "~/Downloads/[App - MyApp] Smoke testing - app.csv"` |
-| Không có test case | `... app ở ~/projects/my-app, chưa có test case, hãy tự tạo bộ smoke test rồi chạy` |
-| Cả iOS và Android | `... chạy trên cả iOS simulator và Android emulator` |
-| Lần sau (đã cài skill) | `/rn-smoke-test ~/projects/my-app ~/Downloads/smoke.xlsx ios` (cài dạng plugin: `/rn-maestro-smoke:rn-smoke-test ...`) — hoặc chỉ cần nói "chạy smoke test ..." |
+| `.csv` exported from Google Sheets | `... with the test-case file "~/Downloads/[App - MyApp] Smoke testing - app.csv"` |
+| No test cases | `... the app in ~/projects/my-app has no test cases yet, create a smoke test suite and run it` |
+| Both iOS and Android | `... run on both the iOS simulator and the Android emulator` |
+| Next time (skill installed) | `/rn-smoke-test ~/projects/my-app ~/Downloads/smoke.xlsx ios` (installed as a plugin: `/rn-maestro-smoke:rn-smoke-test ...`) — or simply say "run a smoke test ..." |
 
-Claude sẽ: kiểm tra môi trường → phân tích project → đọc test case → phân loại case nào tự động được
-→ khám phá UI thật trên simulator → viết flow Maestro → chạy, tự sửa flow lỗi (không "sửa" để che bug app)
-→ xuất Excel → báo cáo PASS/FAIL/PENDING kèm lý do.
+Prompts in Vietnamese work just as well.
 
-## 2. Kết quả nhận được
+Claude will: check the environment → analyze the project → read the test cases → triage which cases can be
+automated → explore the real UI on the simulator → write Maestro flows → run them and fix broken flows (never
+"fixing" a flow to hide an app bug) → export the Excel file → report PASS/FAIL/PENDING with reasons.
 
-`<project>/.maestro/smoke/runs/<ngày_giờ>/`
+## 2. What you get
 
-| File | Nội dung |
+`<project>/.maestro/smoke/runs/<date_time>/`
+
+| File | Contents |
 |---|---|
-| `<tên file gốc> - 2710.xlsx` | Toàn bộ workbook gốc (không đụng các tab cũ) + **tab mới `2710`** clone từ tab test case: cùng cột, style, độ rộng, freeze header, dropdown, tô màu |
-| `evidence/ios/TC-xxx.png`, `evidence/android/...` | Ảnh màn hình tại thời điểm kiểm tra (link trong cột IOS / ANDROID) |
-| `results-ios.json`, `logs/`, `maestro/` | Kết quả chi tiết, log và artifact gốc của Maestro |
+| `<original file name> - 2710.xlsx` | The whole original workbook (existing tabs untouched) + a **new `2710` tab** cloned from the test-case tab: same columns, styles, widths, frozen header, dropdowns, colouring |
+| `evidence/ios/TC-xxx.png`, `evidence/android/...` | Screenshots taken at the moment of verification (linked from the IOS / ANDROID columns) |
+| `results-ios.json`, `logs/`, `maestro/` | Detailed results, logs and raw Maestro artifacts |
 
-Trong tab mới:
+In the new tab:
 
-| Cột | Giá trị |
+| Column | Value |
 |---|---|
-| **Result** | `PASS` — flow chạy qua và mọi ý trong *Expected result* đều được kiểm tra · `FAIL` — app không đạt *Expected result* · `PENDING` — chưa kiểm chứng được (lý do ở Note) |
-| **Actual result** | `As expected` hoặc mô tả điều app thực sự làm |
+| **Result** | `PASS` — the flow ran and every claim in *Expected result* was checked · `FAIL` — the app did not meet *Expected result* · `PENDING` — not verified (reason in Note) |
+| **Actual result** | `As expected`, or a description of what the app actually did |
 | **Note** | `[Auto] Maestro iOS: PASS in 42s`, `[Manual] Needs the confirmation-code email`, `[Blocked] Needs TEST_EMAIL`... |
-| **Test ID** | Điền `TC-001...` nếu cột đang trống (để đối chiếu với evidence) |
-| Khối summary | Tested by, Test Date, Build version (lấy từ app đã cài), số Pass / Fail / Pending, tổng số case |
+| **Test ID** | Filled with `TC-001...` when the column is empty (to match the evidence files) |
+| Summary block | Tested by, Test Date, Build version (read from the installed app), Pass / Fail / Pending counts, total cases |
 
-> Mặc định link evidence là đường dẫn tương đối — khi gửi cho người khác hãy gửi **cả thư mục run** (hoặc zip lại),
-> hoặc dùng link công khai (mục dưới).
-> Muốn import vào Google Sheets: `rnsmoke export --only-new-tab` rồi *File → Import → Insert new sheet(s)*.
-> Cần đúng định dạng `.xls` (Excel 97-2003): `rnsmoke export --xls` (cần LibreOffice).
+> By default evidence links are relative paths — when sharing, send **the whole run folder** (or a zip of it),
+> or upload the evidence to Google Drive (below).
+> To import into Google Sheets: `rnsmoke export --only-new-tab`, then *File → Import → Insert new sheet(s)*.
+> Need the legacy `.xls` format (Excel 97-2003)? `rnsmoke export --xls` (requires LibreOffice).
 
-### Link evidence cho cả team — Google Drive (khuyên dùng)
+### Evidence links for the whole team — Google Drive (recommended)
 
-Ảnh/video evidence được upload lên **Google Drive của người chạy** (`RN smoke evidence/<tên sheet>/<run>`), link
-`drive.google.com/file/d/...` được ghi vào từng ô cột IOS / ANDROID (giống sheet cũ).
+Evidence screenshots/videos are uploaded to **the Google Drive of the person running the tests**
+(`RN smoke evidence/<sheet name>/<run>`), and `drive.google.com/file/d/...` links are written into each cell of the
+IOS / ANDROID columns (just like the old sheet).
 
-- **Quyền tối thiểu `drive.file`**: công cụ chỉ thấy file do nó tạo, không đọc được gì khác trong Drive.
-- **Mặc định riêng tư**: chỉ bạn + người được share thư mục xem được (share `RN smoke evidence` cho team một lần là xong);
-  `--share domain` = cả công ty xem được (chỉ đọc).
-- Đăng nhập OAuth do công cụ tự làm (trình duyệt, PKCE); token tự lưu ở `~/.rnsmoke/google-token.json` (quyền 600)
-  và tự gia hạn. Gỡ quyền tại myaccount.google.com/permissions.
+- **Least privilege (`drive.file`)**: the tool can only see the files it created — nothing else in your Drive.
+- **Private by default**: only you and the people the folder is shared with can open the links (share
+  `RN smoke evidence` with your team once and you are done); `--share domain` = everyone in the company can view.
+- The tool performs the OAuth sign-in itself (browser, PKCE); the token is stored in `~/.rnsmoke/google-token.json`
+  (mode 600) and refreshed automatically. Revoke access at myaccount.google.com/permissions.
 
-**Tạo OAuth client — 1 lần cho cả team, ai làm cũng được (~10 phút, không cần quyền admin Workspace)**
-1. Tạo project: <https://console.cloud.google.com/projectcreate> (tên tuỳ ý, ví dụ `rnsmoke`).
-2. Bật Drive API: <https://console.cloud.google.com/apis/library/drive.googleapis.com> → **Enable**.
-3. Màn hình đồng ý: <https://console.cloud.google.com/auth/overview> → *Get started* → App name `rnsmoke`, email hỗ trợ →
-   Audience **Internal** (tài khoản Google Workspace công ty) → email liên hệ → *Create*.
-   Nếu không có lựa chọn Internal: chọn **External**, rồi ở *Audience* bấm **Publish app** (quyền `drive.file` không cần
-   Google duyệt; nếu để chế độ *Testing* thì token tự hết hạn sau 7 ngày).
-4. Tạo client: <https://console.cloud.google.com/auth/clients/create> → Application type **Desktop app** → *Create* →
-   **Download JSON** (file `client_secret_….json` nằm trong Downloads).
+**Create the OAuth client — once for the whole team, anyone can do it (~10 minutes, no Workspace admin rights needed)**
+1. Create a project: <https://console.cloud.google.com/projectcreate> (any name, e.g. `rnsmoke`).
+2. Enable the Drive API: <https://console.cloud.google.com/apis/library/drive.googleapis.com> → **Enable**.
+3. Consent screen: <https://console.cloud.google.com/auth/overview> → *Get started* → App name `rnsmoke`, support email →
+   Audience **Internal** (company Google Workspace accounts) → contact email → *Create*.
+   If Internal is not available: choose **External**, then click **Publish app** under *Audience* (the `drive.file`
+   scope does not require Google verification; in *Testing* mode tokens expire after 7 days).
+4. Create the client: <https://console.cloud.google.com/auth/clients/create> → Application type **Desktop app** →
+   *Create* → **Download JSON** (a `client_secret_….json` file in your Downloads folder).
 
-**Dùng**
+**Usage**
 ```bash
 R=~/tools/rn-maestro-smoke/skills/rn-smoke-test/bin/rnsmoke
-$R drive-login                                           # tự tìm client_secret_*.json trong Downloads → trình duyệt → Allow
-$R -C <project> upload --dry-run                         # xem trước file nào sẽ được upload (không gọi mạng)
-$R -C <project> export --upload gdrive                   # Excel với link Drive trong cột IOS / ANDROID (riêng tư)
-$R -C <project> export --upload gdrive --share domain    # cả công ty mở được link
+$R drive-login                                           # finds client_secret_*.json in Downloads → browser → Allow
+$R -C <project> upload --dry-run                         # preview which files would be uploaded (no network)
+$R -C <project> export --upload gdrive                   # Excel with Drive links in the IOS / ANDROID columns (private)
+$R -C <project> export --upload gdrive --share domain    # everyone in the company can open the links
 ```
-`drive-login` tự tìm client theo thứ tự: `~/.rnsmoke/`, `skills/rn-smoke-test/google-oauth-client.json`,
-`resource/client_secret_*.json` trong repo, rồi `~/Downloads/client_secret_*.json`.
-Cho cả team khỏi phải chuyền file: lưu client thành `skills/rn-smoke-test/google-oauth-client.json` rồi `git add -f`
-vào **repo private** (`.gitignore` chặn file này mặc định; Google không coi client secret của app Desktop là bí mật).
-Link được cache trong `runs/<ngày_giờ>/uploads.json` nên export lại không upload trùng; nếu Drive lỗi, ô đó giữ link
-cục bộ và file Excel vẫn được tạo.
+`drive-login` looks for the client in this order: `~/.rnsmoke/`, `skills/rn-smoke-test/google-oauth-client.json`,
+`resource/client_secret_*.json` in the repo, then `~/Downloads/client_secret_*.json`.
+To spare the team from passing the file around: save the client as `skills/rn-smoke-test/google-oauth-client.json` and
+`git add -f` it into a **private repo** (`.gitignore` blocks this file by default; Google does not treat the client
+secret of a Desktop app as confidential).
+Links are cached in `runs/<date_time>/uploads.json`, so exporting again never uploads duplicates; if Drive fails, that
+cell keeps its local link and the Excel file is still produced.
 
 <details>
-<summary>Phương án khác: rclone, host công khai</summary>
+<summary>Alternatives: rclone, public hosts</summary>
 
-- `--upload rclone` (sau `brew install rclone` + `rnsmoke rclone-setup`): cùng cấu trúc thư mục Drive. Client Google dùng
-  chung của rclone đang bị ngừng trong năm 2026 (Google tính phí) và có thể lỗi đăng nhập (Google 500) — nên cấu hình rclone
-  với client riêng.
-- Host công khai miễn phí — **không dùng cho app khách hàng**: `catbox` (vĩnh viễn, upload ẩn danh không xoá được),
-  `litterbox --expire 72h` (tự xoá), `imgbb` (cần `IMGBB_API_KEY`), `droplr` (thử nghiệm, SDK cũ chưa kiểm chứng).
+- `--upload rclone` (after `brew install rclone` + `rnsmoke rclone-setup`): same Drive folder layout. rclone's shared
+  Google client is being retired in 2026 (Google is starting to charge for it) and its sign-in may fail (Google 500)
+  — configure rclone with your own client instead.
+- Free public hosts — **do not use for client apps**: `catbox` (permanent, anonymous uploads cannot be deleted),
+  `litterbox --expire 72h` (self-deleting), `imgbb` (needs `IMGBB_API_KEY`), `droplr` (experimental, old SDK,
+  unverified).
 </details>
 
-## 3. Yêu cầu máy
+## 3. Machine requirements
 
-| Thành phần | Ghi chú |
+| Component | Notes |
 |---|---|
-| macOS + Xcode + 1 iOS Simulator đã boot | cho iOS (`open -a Simulator`) |
-| Android SDK + emulator | cho Android (`emulator -avd <tên>`) |
-| Java 17+ | Maestro cần (`brew install openjdk@17`) |
-| [Maestro CLI](https://maestro.mobile.dev) | `curl -fsSL "https://get.maestro.mobile.dev" \| bash` — Claude tự cài nếu thiếu |
-| Python 3.9+ | wrapper tự tạo venv và cài `openpyxl` ở `~/.rnsmoke/venv` |
-| Node + dependencies của app | chỉ khi cần build app hoặc chạy Metro cho bản debug |
+| macOS + Xcode + one booted iOS Simulator | for iOS (`open -a Simulator`) |
+| Android SDK + emulator | for Android (`emulator -avd <name>`) |
+| Java 17+ | required by Maestro (`brew install openjdk@17`) |
+| [Maestro CLI](https://maestro.mobile.dev) | `curl -fsSL "https://get.maestro.mobile.dev" \| bash` — Claude installs it if missing |
+| Python 3.9+ | the wrapper creates a venv with `openpyxl` in `~/.rnsmoke/venv` if needed |
+| Node + the app's dependencies | only needed to build the app or run Metro for debug builds |
 
-Kiểm tra nhanh: `skills/rn-smoke-test/bin/rnsmoke doctor`
+Quick check: `skills/rn-smoke-test/bin/rnsmoke doctor`
 
-## 4. Cài đặt
+## 4. Installation
 
-**Cách A — script (khuyên dùng):**
+**Option A — script (recommended):**
 ```bash
 git clone https://github.com/<your-org>/rn-maestro-smoke ~/tools/rn-maestro-smoke
-~/tools/rn-maestro-smoke/install.sh          # symlink skill vào ~/.claude/skills/rn-smoke-test
+~/tools/rn-maestro-smoke/install.sh          # symlinks the skill into ~/.claude/skills/rn-smoke-test
 ```
-`git pull` là cập nhật xong (vì là symlink). `--copy` để copy thay vì symlink, `--project <path>` để cài
-riêng cho một project.
+`git pull` is all it takes to update (it is a symlink). Use `--copy` to copy instead of symlinking, and
+`--project <path>` to install for a single project.
 
-**Cách B — plugin marketplace của Claude Code:**
+**Option B — Claude Code plugin marketplace:**
 ```text
 /plugin marketplace add <your-org>/rn-maestro-smoke
 /plugin install rn-maestro-smoke@rn-maestro-smoke
 ```
 
-**Cách C — không cài:** mở Claude Code ngay trong thư mục repo này (file `CLAUDE.md` sẽ hướng dẫn Claude).
+**Option C — no install:** open Claude Code inside this repo folder (`CLAUDE.md` tells Claude what to do).
 
-## 5. Dữ liệu test & bảo mật
+## 5. Test data & security
 
-- Tài khoản/dữ liệu test để trong `<project>/.maestro/smoke/.env` (mẫu: `.env.example`), flow dùng `${TEST_EMAIL}`.
-  File này đã được git-ignore; flow không bao giờ chứa mật khẩu.
-- Case cần trạng thái dữ liệu riêng (user có 2 profile, đã book lớp, có gói tập...) → Claude sẽ liệt kê
-  và hỏi **một lần**; không có thì case đó là `PENDING [Blocked]`.
-- Claude **không sửa source code app**, không làm thao tác không thể hoàn tác (thanh toán thật, xoá tài khoản,
-  tạo dữ liệu trên production) khi chưa được bạn đồng ý rõ ràng. Nên test trên bản dev/staging.
+- Test accounts/data go in `<project>/.maestro/smoke/.env` (template: `.env.example`); flows use `${TEST_EMAIL}`.
+  This file is git-ignored; flows never contain passwords.
+- Cases that need a specific data state (a user with 2 profiles, a booked class, an active package...) → Claude lists
+  them and asks **once**; without that data the case is `PENDING [Blocked]`.
+- Claude **does not modify the app's source code** and performs no irreversible actions (real payments, deleting
+  accounts, creating data in production) without your explicit approval. Test against dev/staging builds.
 
-## 6. Thư mục trong project React Native
+## 6. Folder inside the React Native project
 
 ```
 <project>/.maestro/smoke/
-  config.json        app id cho iOS/Android, cổng Metro
-  manifest.json      mỗi test case → flow / manual / blocked (+ lý do)
-  cases.json         test case đã parse lần gần nhất
-  flows/<section>/   1 flow Maestro cho mỗi case          ← nên commit
-  subflows/          launch sạch, login, ẩn bàn phím...   ← nên commit
-  .env               dữ liệu test (git-ignored)
-  runs/              kết quả từng lần chạy (git-ignored)
+  config.json        app ids for iOS/Android, Metro port
+  manifest.json      each test case → flow / manual / blocked (+ reason)
+  cases.json         the most recently parsed test cases
+  flows/<section>/   one Maestro flow per case                   ← commit these
+  subflows/          clean launch, login, hide keyboard...        ← commit these
+  .env               test data (git-ignored)
+  runs/              results of each run (git-ignored)
 ```
-Sprint sau: đưa file test case mới, flow cũ được dùng lại (case sửa nhẹ tự relink), Claude chỉ viết flow
-cho case mới.
+Next sprint: provide the new test-case file; existing flows are reused (lightly edited cases are relinked
+automatically) and Claude only writes flows for new cases.
 
-## 7. Lệnh CLI (Claude tự dùng, bạn cũng có thể chạy tay)
+## 7. CLI commands (Claude uses them; you can run them by hand too)
 
 ```bash
 R=~/tools/rn-maestro-smoke/skills/rn-smoke-test/bin/rnsmoke
-$R doctor                                         # kiểm tra môi trường
-$R device-setup --platform ios                    # tắt "Suggest Strong Passwords" trên simulator (1 lần)
-$R -C <project> analyze                           # app id, scheme/flavor, app đã cài (debug/release)
-$R -C <project> init                              # tạo .maestro/smoke
-$R -C <project> cases --input <file.xlsx|.csv>    # đọc test case
-$R -C <project> status                            # độ phủ automation theo section
+$R doctor                                         # check the environment
+$R device-setup --platform ios                    # turn off "Suggest Strong Passwords" on the simulator (once)
+$R -C <project> analyze                           # app ids, schemes/flavors, installed app (debug/release)
+$R -C <project> init                              # create .maestro/smoke
+$R -C <project> cases --input <file.xlsx|.csv>    # read the test cases
+$R -C <project> status                            # automation coverage per section
 $R -C <project> mark TC-004 --flow flows/registration/x.yaml
-$R -C <project> mark TC-001 --manual "Cần email OTP"
-$R -C <project> inspect --platform ios            # liệt kê phần tử trên màn hình + screenshot
-$R -C <project> metro start --prewarm ios         # cho bản debug
-$R -C <project> run --platform ios                # chạy (batch 10 flow, tự retry flow lỗi)
-$R -C <project> results                           # tóm tắt fail/error kèm evidence
-$R -C <project> export                            # xuất Excel với tab DDMM
-$R -C <project> upload --dry-run                  # xem trước evidence nào sẽ bị công khai
-$R drive-login                                    # 1 lần: đăng nhập Google Drive (OAuth client của team)
-$R -C <project> export --upload gdrive            # xuất Excel với link evidence trên Google Drive
+$R -C <project> mark TC-001 --manual "Needs the OTP email"
+$R -C <project> inspect --platform ios            # list on-screen elements + screenshot
+$R -C <project> metro start --prewarm ios         # for debug builds
+$R -C <project> run --platform ios                # run (batches of 10 flows, failed flows retried)
+$R -C <project> results                           # summary of failures/errors with evidence
+$R -C <project> export                            # export Excel with the DDMM tab
+$R -C <project> upload --dry-run                  # preview which evidence files would be uploaded
+$R drive-login                                    # once: sign in to Google Drive (team OAuth client)
+$R -C <project> export --upload gdrive            # export Excel with evidence links on Google Drive
 ```
 
-## 8. Giới hạn cần biết
+## 8. Known limits
 
-- Không tự kiểm chứng được: nội dung email/SMS/OTP, push notification, thanh toán thật, dữ liệu ở hệ
-  thống bên ngoài (CRM, back-office), camera/biometric → `PENDING [Manual]`.
-- Bản **Release** cho kết quả ổn định nhất; bản Debug cần Metro và có overlay LogBox (skill đã xử lý).
-- Mỗi flow mất ~0.5–2 phút; lần đầu viết flow cho bộ 100+ case sẽ mất nhiều thời gian nhất, các lần sau
-  chỉ chạy lại.
+- Cannot be verified automatically: email/SMS/OTP content, push notifications, real payments, data in external
+  systems (CRM, back-office), camera/biometrics → `PENDING [Manual]`.
+- **Release** builds give the most stable results; debug builds need Metro and show LogBox overlays (the skill
+  handles them).
+- Each flow takes ~0.5–2 minutes; writing flows for a 100+ case suite takes the most time the first time, later
+  sprints only re-run them.
 
-## 9. Phát triển
+## 9. Development
 
 ```bash
-python3 -m unittest discover -s tests -v     # 100% offline, không cần thiết bị
+python3 -m unittest discover -s tests -v     # 100% offline, no device needed
 ```
-Cấu trúc:
+Layout:
 ```
 .claude-plugin/            plugin.json + marketplace.json
 skills/rn-smoke-test/
-  SKILL.md                 quy trình Claude làm theo
-  reference/               cheatsheet Maestro cho RN, cách viết flow, phân loại case, build app, xử lý lỗi
-  templates/               subflow mẫu, flow ví dụ, setup thiết bị
-  bin/rnsmoke              wrapper (tự bootstrap Python env)
-  scripts/rnsmoke/         Python package: parse sheet, chạy Maestro, xuất Excel
-tests/                     unit test với dữ liệu giả lập
-examples/                  checklist mẫu (dữ liệu giả)
+  SKILL.md                 the workflow Claude follows
+  reference/               Maestro cheatsheet for RN, writing flows, triaging cases, building the app, troubleshooting
+  templates/               subflow templates, example flow, device setup
+  bin/rnsmoke              wrapper (bootstraps its Python env)
+  scripts/rnsmoke/         Python package: parse sheets, run Maestro, export Excel, upload evidence
+tests/                     unit tests with synthetic data
+examples/                  sample checklist (fake data)
 install.sh
 ```
