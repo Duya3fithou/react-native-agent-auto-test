@@ -30,7 +30,33 @@ between Bash calls — repeat the `RNSMOKE=...` assignment (or use the full path
   expected result), **PENDING** (not verified: manual-only, blocked by missing data, automation error,
   or no flow yet — the reason is in Note).
 - Reusable assets in `<project>/.maestro/smoke/`: `flows/`, `subflows/`, `manifest.json` (case ↔ flow),
-  `config.json`. These are meant to be committed; `runs/` and `.env` are git-ignored.
+  `config.json`. These are meant to be committed to the app repo (re-runs then skip straight to
+  run → export); `runs/`, `.env` and `cases.json` are git-ignored.
+
+## Data safety — absolute, overrides everything below
+
+A smoke session may change the data of **exactly one test account** (the one in `.maestro/smoke/.env`:
+`TEST_EMAIL` / `TEST_PASSWORD`, or `TEST_USERNAME` / `TEST_PHONE`) and **nothing else**. Missing coverage
+is acceptable; junk data in the client's system is not.
+
+- **Never create accounts or profiles**: no sign-up / registration submit, no "add profile/member/child",
+  no new, random or timestamped e-mails (`+${Date}`, `inputRandomEmail`), not even to reach a form "only
+  to test validation" — a validation regression would create a real account.
+- **Never create or remove records**: bookings, waitlists, purchases, payments, orders, claims, posts,
+  messages, feedback, invites, uploads, signed waivers/agreements, deletions, cancellations.
+- **Never change the test account's password or identity, and never delete or deactivate it.**
+- **Allowed**: reading anything; signing in/out with the session account; idempotent edits of that
+  account's own fields (same value every run, flow marked `--data account`).
+- **One account per session**: no second account, no `TEST_EMAIL_2` / admin credentials. `rnsmoke`
+  drops extra account variables and refuses a different account in the same run.
+- Cases that need any of the forbidden actions are `manual` with the reason
+  `Data safety: <what it would create/change>` — do not ask the user for permission to bypass this.
+- Enforced by code: `run`, `mark --flow` and `inspect --flow` scan every flow and subflow
+  (`scripts/rnsmoke/safety.py`) and refuse violations; there is no switch to disable it. Do not look for
+  ways around it, and **never run `maestro test` directly against the app** — always through `rnsmoke`.
+  A tap the guard misreads (a bottom tab named "Book", a date-picker overlay tapped by coordinates)
+  may be declared harmless with `# rnsmoke-safe-tap: "<label>" -- <reason>` in that flow, only when it
+  provably changes no server data; every such line is listed by `status` for human review.
 
 ## Non-negotiable rules
 
@@ -46,22 +72,54 @@ between Bash calls — repeat the `RNSMOKE=...` assignment (or use the full path
    mention them in the final report as suggestions.
 5. **No secrets in flows.** Credentials and test data live in `.maestro/smoke/.env` and are referenced
    as `${VAR}`; never echo their values back.
-6. **No irreversible side effects without explicit approval:** real purchases, deleting/cancelling
-   accounts or memberships, messaging real people, creating data in production, publishing evidence
-   to a public file host. Mark such cases `manual` (or ask once). Test against dev/staging builds
-   unless the user says otherwise.
+6. **Data safety (above) is absolute.** Beyond it, no irreversible side effects without explicit
+   approval: messaging real people, publishing evidence to a public file host. Test against
+   dev/staging builds unless the user says otherwise.
 7. **Ask once, then run autonomously.** Collect missing inputs in a single question round at the
    start; afterwards keep going and post short progress updates (section done, X/Y passing).
 8. Never overwrite the user's input file; never hand-edit `results-*.json` or `cases.json`.
 
 ## Workflow
 
+### Re-run fast path — check this first
+
+If `<project>/.maestro/smoke/manifest.json` exists and, after `cases`, `status` shows at least one
+`automated` case, the flows were written in an earlier round (usually committed to the app repo). This is
+a **re-run**: do NOT triage, explore the UI or write flows — those are the slow, expensive steps and they
+are already done. Only:
+
+```bash
+test -f <project>/.maestro/smoke/manifest.json && echo "re-run: use the fast path"
+"$RNSMOKE" doctor                                          # + device-setup once on a new simulator
+"$RNSMOKE" -C <project> cases --input "<sheet>"            # relinks the saved flows; prints Coverage
+"$RNSMOKE" -C <project> status                             # automated / manual / blocked / todo
+#   app on the device: step 4 (Metro only for debug builds)
+"$RNSMOKE" -C <project> run --platform ios                 # Bash run_in_background
+"$RNSMOKE" -C <project> run --platform android --run-dir latest   # if both platforms (can run in parallel)
+"$RNSMOKE" -C <project> export                             # + --upload gdrive if the user wants Drive links
+```
+- Inputs (step 0): ask only for what is missing — sheet, platform(s), build. Test data comes from the
+  existing `.maestro/smoke/.env`.
+- Failures: step 8 applies, but only to fix flows broken by an app/UI change (max 3 attempts per flow);
+  real app failures stay FAIL.
+- `todo` cases (new rows, or rows edited too much to relink): leave them PENDING `[Not automated]`. In the
+  final message give their count and ids and offer to automate them as a separate, slower job (steps
+  5–6) — start it only if the user asks.
+- Cases relinked to an edited row (`status`: "relinked from ...") run as they are; list them in the final
+  message so someone checks the flow still matches the new wording.
+- `manual` / `blocked` stay as they are; if the user now provides the missing test data (e.g. accounts),
+  say which blocked cases could be automated next.
+
+No manifest, or no automated case yet → first round: follow steps 0–9.
+
 ### 0. Inputs
 
 Needed: React Native project path · test-case file (.xlsx/.csv) **or** "none" · platform(s)
-(default: iOS when on macOS, else Android) · test accounts / data · which build/environment.
+(default: iOS when on macOS, else Android) · **one** dedicated test account on a dev/staging backend
+(`TEST_EMAIL` + `TEST_PASSWORD` in `.maestro/smoke/.env`) · which build/environment.
 If the project path or test-case file is unclear, ask (one AskUserQuestion round, include the test
 account question). Without credentials, continue: credential-dependent cases become `blocked`.
+Never ask for a second account.
 
 ### 1. Environment
 
@@ -99,16 +157,20 @@ tested; a Release build (bundled JS, no dev overlays) is the most reliable. For 
 ### 5. Triage every case
 
 Read [reference/triage-rules.md](reference/triage-rules.md). Bulk-mark what cannot be automated, with a
-reason that will appear verbatim in the Note column:
+reason that will appear verbatim in the Note column. Apply **Data safety** first: every case that would
+create an account or a record, or change anything but the session account, is `manual`:
 
 ```bash
+"$RNSMOKE" -C <project> mark --section Registration --manual "Data safety: would create an account"
+"$RNSMOKE" -C <project> mark TC-051 TC-052 --manual "Data safety: would create a booking"
 "$RNSMOKE" -C <project> mark TC-001 TC-007 --manual "Needs the confirmation-code email"
-"$RNSMOKE" -C <project> mark --section "E2E Purchase" --manual "Real payment"
+"$RNSMOKE" -C <project> mark --section "E2E Purchase" --manual "Data safety: real payment"
 "$RNSMOKE" -C <project> mark TC-008..TC-011 --blocked "Needs TEST_EMAIL / TEST_PASSWORD"
 "$RNSMOKE" -C <project> status          # coverage per section, TODO list, problems
 ```
-If several cases need the same missing data (an account with a booking, two profiles...), list the
-needs and ask the user once; put answers into `.maestro/smoke/.env`.
+Cases that depend on a data state (an existing booking, two profiles...) run only if the single test
+account already has that state — ask the user once what state the account is in; never create it.
+Otherwise `blocked` with the missing state as the reason.
 
 ### 6. Author flows (section by section)
 
@@ -124,7 +186,9 @@ Read [reference/authoring-flows.md](reference/authoring-flows.md) and
 3. Write `flows/<section-slug>/<case-slug>.yaml`: header comment (case id, steps, expected), unique
    `name:`, `appId: ${APP_ID}`, one assertion per observable claim, `takeScreenshot: evidence` when
    the expected result is on screen. Validate with `maestro check-syntax <file>`.
-4. Link it: `"$RNSMOKE" -C <project> mark TC-012 --flow flows/login/wrong-password.yaml [--requires TEST_EMAIL,TEST_PASSWORD] [--partial "<what is not verified>"]`
+4. Link it: `"$RNSMOKE" -C <project> mark TC-012 --flow flows/login/wrong-password.yaml [--requires TEST_EMAIL,TEST_PASSWORD] [--data account] [--partial "<what is not verified>"]`
+   — refused if the flow breaks Data safety. `--data account` only for idempotent edits of the session
+   account's own fields.
 5. Run it right away: `"$RNSMOKE" -C <project> run --platform ios --only TC-012 [--run-dir latest] --retries 0`
    then fix flow problems until it passes or you have confirmed a real app failure (step 8).
 
@@ -189,8 +253,10 @@ how to re-run next sprint.
 
 ## Next sprint
 
-`cases --input <new sheet>` keeps flows linked by content and relinks lightly edited cases (flagged for
-review in `status`). Author flows only for new TODO cases, then `run` → `export`.
+Use the **Re-run fast path** at the top of the workflow. `cases --input <new sheet>` keeps flows linked by
+content and relinks lightly edited cases. Tell the user to commit `<project>/.maestro/smoke/` (flows,
+subflows, `manifest.json`, `config.json`) to the app repo so every tester and machine reuses the flows;
+`.env`, `runs/` and `cases.json` stay local (git-ignored).
 
 ## Reference
 

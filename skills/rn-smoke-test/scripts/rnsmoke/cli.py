@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from . import __version__
+from . import __version__, safety
 from .util import UserError, git_user_name, info, read_json, short, warn
 from .workspace import Workspace, select_cases
 
@@ -147,6 +147,11 @@ def cmd_status(args) -> int:
     todo = [r["id"] for r in rows if r["status"] == "todo"]
     if todo:
         print(f"\nTODO ({len(todo)}): {', '.join(todo)}")
+    exceptions = report.get("safe_tap_exceptions") or []
+    if exceptions:
+        print(f"\nData-safety exceptions to review ({len(exceptions)}) - taps a flow declared harmless:")
+        for item in exceptions:
+            print(f"  {item['id']}: '{item['tap']}' ({item['file']}:{item['line']}) -- {item['reason']}")
     for warning in report.get("warnings") or []:
         print(f"\nWARNING: {warning}")
     problems = [r for r in rows if r["problems"]]
@@ -183,8 +188,11 @@ def cmd_mark(args) -> int:
     else:
         raise UserError("Choose one of --flow FILE | --manual REASON | --blocked REASON | --todo")
     rel = ws.mark(cases, status, flow=args.flow, reason=reason, platforms=_csv(args.platforms) or None,
-                  requires=_csv(args.requires) if args.requires is not None else None, uncovered=args.partial)
-    print(f"Marked {len(cases)} case(s) as {status}{' -> ' + rel if rel else ''}: {', '.join(c['id'] for c in cases)}")
+                  requires=_csv(args.requires) if args.requires is not None else None, uncovered=args.partial,
+                  data=args.data if args.flow else None)
+    level = f" (data: {args.data})" if args.flow else ""
+    print(f"Marked {len(cases)} case(s) as {status}{' -> ' + rel if rel else ''}{level}: "
+          f"{', '.join(c['id'] for c in cases)}")
     return 0
 
 
@@ -214,7 +222,7 @@ def cmd_inspect(args) -> int:
     from . import hierarchy
 
     ws = _ws(args)
-    env = ws.env_vars()
+    env = safety.filter_env(ws.env_vars())
     if args.flow:
         try:
             env.update(APP_ID=ws.app_id(args.platform), PLATFORM=args.platform)
@@ -223,6 +231,8 @@ def cmd_inspect(args) -> int:
     flow = Path(args.flow).expanduser().resolve() if args.flow else None
     if flow and not flow.exists():
         flow = ws.flow_path(args.flow)
+    if flow:
+        safety.require_safe(flow, args.data)            # exploration obeys the same data-safety rules
     result = hierarchy.inspect(args.platform, ws.inspect_dir, args.device, flow, env)
     print(f"Device: {result['device']}")
     if result.get("flow"):
@@ -467,6 +477,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--platforms", help="ios,android (default: from the Platform column)")
     p.add_argument("--requires", help="env vars the flow needs, e.g. TEST_EMAIL,TEST_PASSWORD")
     p.add_argument("--partial", metavar="NOT_COVERED", help="flow covers only part of the expected result")
+    p.add_argument("--data", choices=safety.DATA_LEVELS, default="none",
+                   help="data the flow may change: none (default) | account = idempotent edits of the ONE "
+                        "session test account; flows that create accounts/records are always refused")
     p.set_defaults(func=cmd_mark)
 
     p = sub.add_parser("device-setup", help="one-time simulator tweaks (iOS: disable strong-password sheet)")
@@ -478,6 +491,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--platform", choices=("ios", "android"), required=True)
     p.add_argument("--device")
     p.add_argument("--flow", help="run this flow first to reach the screen")
+    p.add_argument("--data", choices=safety.DATA_LEVELS, default="none", help="data level of --flow")
     p.set_defaults(func=cmd_inspect)
 
     p = sub.add_parser("metro", help="start/stop/status of the Metro bundler")

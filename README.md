@@ -23,7 +23,7 @@ Test cases (.xlsx/.csv) ──► Claude reads the cases + app code ──► wr
 Open Claude Code anywhere and paste a prompt (adjust the paths):
 
 ```text
-Clone https://github.com/<your-org>/rn-maestro-smoke into ~/tools/rn-maestro-smoke and run ./install.sh.
+Clone https://github.com/Duya3fithou/react-native-agent-auto-test into ~/tools/rn-maestro-smoke and run ./install.sh.
 Then use the rn-smoke-test skill to smoke test the React Native app in ~/projects/my-app
 with the test-case file "~/Downloads/[App - MyApp] Smoke testing.xlsx" on the iOS simulator.
 Test account: email ... / password ... (if any).
@@ -135,7 +135,7 @@ Quick check: `skills/rn-smoke-test/bin/rnsmoke doctor`
 
 **Option A — script (recommended):**
 ```bash
-git clone https://github.com/<your-org>/rn-maestro-smoke ~/tools/rn-maestro-smoke
+git clone https://github.com/Duya3fithou/react-native-agent-auto-test ~/tools/rn-maestro-smoke
 ~/tools/rn-maestro-smoke/install.sh          # symlinks the skill into ~/.claude/skills/rn-smoke-test
 ```
 `git pull` is all it takes to update (it is a symlink). Use `--copy` to copy instead of symlinking, and
@@ -143,20 +143,33 @@ git clone https://github.com/<your-org>/rn-maestro-smoke ~/tools/rn-maestro-smok
 
 **Option B — Claude Code plugin marketplace:**
 ```text
-/plugin marketplace add <your-org>/rn-maestro-smoke
+/plugin marketplace add Duya3fithou/react-native-agent-auto-test
 /plugin install rn-maestro-smoke@rn-maestro-smoke
 ```
 
 **Option C — no install:** open Claude Code inside this repo folder (`CLAUDE.md` tells Claude what to do).
 
-## 5. Test data & security
+## 5. Data safety & test data
 
-- Test accounts/data go in `<project>/.maestro/smoke/.env` (template: `.env.example`); flows use `${TEST_EMAIL}`.
-  This file is git-ignored; flows never contain passwords.
-- Cases that need a specific data state (a user with 2 profiles, a booked class, an active package...) → Claude lists
-  them and asks **once**; without that data the case is `PENDING [Blocked]`.
-- Claude **does not modify the app's source code** and performs no irreversible actions (real payments, deleting
-  accounts, creating data in production) without your explicit approval. Test against dev/staging builds.
+**A smoke session changes the data of exactly ONE test account and nothing else.** Missing coverage is acceptable;
+junk data in your system is not.
+
+- Provide **one** dedicated test account on a dev/staging backend in `<project>/.maestro/smoke/.env`
+  (`TEST_EMAIL` / `TEST_PASSWORD`; template: `.env.example`). The file is git-ignored; flows never contain passwords.
+  Any other account variable (`TEST_EMAIL_2`, `ADMIN_PASSWORD`...) is ignored, and a run refuses to switch accounts.
+- **Never automated** (reported `PENDING [Manual] Data safety: ...`): sign-up / registration — including negative
+  sign-up cases, because reaching and submitting the form needs a new e-mail and a validation bug would create a real
+  account — adding profiles, bookings, waitlists, purchases, payments, claims, posts, feedback, uploads, signing
+  waivers, deleting or cancelling anything, changing the account's password, deleting the account.
+- **Allowed**: reading screens, signing in/out with the test account, idempotent edits of that account's own fields.
+- **Enforced in code, cannot be switched off**: before anything runs, `rnsmoke` scans every flow and subflow and
+  refuses flows that type another identity (another e-mail, `+timestamp` addresses, random names), tap
+  create/register/delete-account or record-creating buttons (book, buy, submit, send, post, add, delete...), or call
+  APIs from scripts. Refused cases are not run and the reason goes into the Note column. A tap the guard misreads (a
+  tab called "Book") can be declared harmless in the flow file — `rnsmoke status` lists every such line for review.
+- Cases that need a data state (2 profiles, a booked class...) run only if the single test account already has it;
+  Claude asks once and never creates it.
+- Claude **does not modify the app's source code**.
 
 ## 6. Folder inside the React Native project
 
@@ -164,14 +177,16 @@ git clone https://github.com/<your-org>/rn-maestro-smoke ~/tools/rn-maestro-smok
 <project>/.maestro/smoke/
   config.json        app ids for iOS/Android, Metro port
   manifest.json      each test case → flow / manual / blocked (+ reason)
-  cases.json         the most recently parsed test cases
+  cases.json         the most recently parsed test cases (git-ignored)
   flows/<section>/   one Maestro flow per case                   ← commit these
   subflows/          clean launch, login, hide keyboard...        ← commit these
   .env               test data (git-ignored)
   runs/              results of each run (git-ignored)
 ```
-Next sprint: provide the new test-case file; existing flows are reused (lightly edited cases are relinked
-automatically) and Claude only writes flows for new cases.
+**Commit `.maestro/smoke/` to the app repo** (the git-ignored `.env`, `runs/` and `cases.json` stay local). Every
+tester and machine then reuses the flows: the next round goes straight to *run → export* — no triage, no UI
+exploration, no flow writing. Lightly edited cases are relinked automatically; new cases are reported as
+`PENDING [Not automated]` and Claude offers to automate them as a separate job.
 
 ## 7. CLI commands (Claude uses them; you can run them by hand too)
 

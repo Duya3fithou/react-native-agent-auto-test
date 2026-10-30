@@ -25,7 +25,7 @@ import os  # noqa: E402
 import urllib.error  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from rnsmoke import gdrive, report, runner, template, testcases, upload  # noqa: E402
+from rnsmoke import gdrive, report, runner, safety, template, testcases, upload  # noqa: E402
 from rnsmoke.util import UserError  # noqa: E402
 from rnsmoke.workspace import Workspace, select_cases  # noqa: E402
 
@@ -687,6 +687,146 @@ class RcloneTests(unittest.TestCase):
                 self.real_rclone_cmd(["listremotes"])
 
 
+class SafetyTests(unittest.TestCase):
+    """Data-safety guard: one session account, no new accounts or records."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "subflows").mkdir()
+        (self.root / "flows").mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def flow(self, name, body):
+        path = self.root / name
+        path.write_text("appId: ${APP_ID}\n---\n" + body, encoding="utf-8")
+        return path
+
+    def rules(self, path, level="none"):
+        return sorted({f.rule for f in safety.violations(safety.check_flow(path, level))})
+
+    def test_safe_login_flow_passes(self):
+        path = self.flow("flows/login.yaml", """
+- launchApp:
+    clearState: true
+- tapOn: "Email address"
+- inputText: "${TEST_EMAIL}"
+- tapOn:
+    text: "Password"
+    below:
+      text: "Sign up today"          # anchor text is not a tap target
+- inputText: ${TEST_PASSWORD}
+- tapOn: "Sign in"
+- extendedWaitUntil:
+    visible: "Create account"         # assertions are never taps
+    timeout: 10000
+- takeScreenshot: evidence
+""")
+        self.assertEqual(self.rules(path), [])
+
+    def test_new_identities_are_refused(self):
+        for body in ('- inputText: "qa+${new Date().getTime()}@example.com"\n',
+                     '- inputText: "someone@company.com"\n',
+                     "- inputRandomEmail\n",
+                     "- inputRandomPersonName\n",
+                     '- inputText: "${TEST_EMAIL_2}"\n',
+                     '- inputText: ${ADMIN_PASSWORD}\n',
+                     "- runFlow:\n    file: ../subflows/x.yaml\n    env:\n      PASSWORD: \"Secret#1\"\n"):
+            with self.subTest(body=body):
+                (self.root / "subflows/x.yaml").write_text("appId: x\n---\n- inputText: ${PASSWORD}\n")
+                self.assertIn("identity", self.rules(self.flow("flows/f.yaml", body)))
+        self.assertEqual(self.rules(self.flow("flows/ok.yaml", '- inputText: "P@ssw0rd!"\n')), [])  # not an e-mail
+
+    def test_account_actions_are_hard_blocked(self):
+        for target in ("CREATE ACCOUNT", "(?i)sign up", "Register", "Delete my account", "Add new profile",
+                       "Change password", "Reset password"):
+            with self.subTest(target=target):
+                path = self.flow("flows/f.yaml", f'- tapOn: "{target}"\n# rnsmoke-safe-tap: "{target}" -- try to excuse it\n')
+                self.assertEqual(self.rules(path, "account"), ["account"])          # annotations cannot clear it
+
+    def test_records_edits_and_annotations(self):
+        path = self.flow("flows/f.yaml", '- tapOn: "Book"\n- tapOn: "Save"\n- tapOn: "Cancel"\n'
+                                         '- tapOn:\n    point: "50%,12%"\n')
+        self.assertEqual(self.rules(path), ["edit", "records", "unverifiable"])     # bare "Cancel" is fine
+        self.assertEqual(self.rules(path, "account"), ["records", "unverifiable"])  # account level may save
+        path = self.flow("flows/f.yaml", '# rnsmoke-safe-tap: "Book" -- bottom tab, navigation only\n'
+                                         '# rnsmoke-safe-tap: "point 50%,12%" -- closes the date picker overlay\n'
+                                         '- tapOn: "Book"\n- tapOn:\n    point: "50%,12%"\n')
+        found = safety.check_flow(path)
+        self.assertEqual(safety.violations(found), [])
+        self.assertEqual(sorted(f.allowed_by for f in found), ["bottom tab, navigation only",
+                                                               "closes the date picker overlay"])
+
+    def test_subflows_env_and_scripts(self):
+        (self.root / "subflows/tap.yaml").write_text("appId: x\n---\n- tapOn: ${TARGET}\n")
+        (self.root / "subflows/api.js").write_text("http.post('https://api.example.com/users', {body: '{}'})\n")
+        path = self.flow("flows/f.yaml", "- runFlow:\n    file: ../subflows/tap.yaml\n    env:\n"
+                                         "      TARGET: \"Join waitlist\"\n- runScript: ../subflows/api.js\n"
+                                         "- runFlow: ../subflows/missing.yaml\n")
+        self.assertEqual(self.rules(path), ["records", "script", "unverifiable"])
+
+    def test_session_account_lock_and_env_filter(self):
+        env = safety.filter_env({"TEST_EMAIL": "qa@company.com", "TEST_PASSWORD": "x", "TEST_EMAIL_2": "b@c.com",
+                                 "ADMIN_PASSWORD": "y", "TEST_FACILITY": "Demo", "TAP_SPINNER": "z"})
+        self.assertEqual(sorted(env), ["TAP_SPINNER", "TEST_EMAIL", "TEST_FACILITY", "TEST_PASSWORD"])
+        self.assertEqual(safety.lock_session(self.root, env), "qa***@company.com")
+        self.assertEqual(safety.lock_session(self.root, env), "qa***@company.com")    # same account again: fine
+        with self.assertRaises(UserError):
+            safety.lock_session(self.root, {"TEST_EMAIL": "other@company.com"})
+        self.assertNotIn("qa@company.com", (self.root / "session.json").read_text())   # only a fingerprint
+
+    def test_workspace_refuses_unsafe_flows(self):
+        (self.root / "package.json").write_text('{"name": "demo"}')
+        ws = Workspace(str(self.root))
+        ws.ensure()
+        ws.save_cases(testcases.load_cases(make_workbook(self.root / "Demo.xlsx")))
+        case = select_cases(ws.load_cases()["cases"], ["TC-001"])
+        bad = ws.flows_dir / "signup.yaml"
+        bad.write_text('appId: x\n---\n- inputText: "a+${new Date().getTime()}@example.com"\n'
+                       '- tapOn: "CREATE ACCOUNT"\n- takeScreenshot: evidence\n')
+        with self.assertRaises(UserError):
+            ws.mark(case, "automated", flow="flows/signup.yaml")
+        with self.assertRaises(UserError):
+            ws.mark(case, "automated", flow="flows/signup.yaml", requires=["TEST_EMAIL_TWO_PROFILES"])
+        good = ws.flows_dir / "home.yaml"
+        good.write_text("appId: x\n---\n- launchApp\n- takeScreenshot: evidence\n")
+        ws.mark(case, "automated", flow="flows/home.yaml", data="account")
+        self.assertEqual(ws.load_manifest()["cases"][case[0]["key"]]["data"], "account")
+        bad.write_text(good.read_text() + '- tapOn: "Book now"\n')                  # flow edited later
+        ws.mark(case, "automated", flow="flows/home.yaml")
+        good.write_text(bad.read_text())
+        problems = next(r for r in ws.status_report()["cases"] if r["id"] == "TC-001")["problems"]
+        self.assertTrue(any(p.startswith("DATA-SAFETY") for p in problems))
+        ws.mark(case, "manual", reason="would create a booking")
+        entry = ws.load_manifest()["cases"][case[0]["key"]]
+        self.assertNotIn("flow", entry)
+
+    def test_runner_never_hands_an_unsafe_flow_to_maestro(self):
+        from rnsmoke.devices import Device
+
+        (self.root / "package.json").write_text('{"name": "demo"}')
+        ws = Workspace(str(self.root))
+        ws.ensure()
+        ws.save_config({"app": {"ios": {"appId": "com.demo"}}, "metro": {"port": 8081}})
+        ws.save_cases(testcases.load_cases(make_workbook(self.root / "Demo.xlsx")))
+        case = select_cases(ws.load_cases()["cases"], ["TC-001"])
+        flow = ws.flows_dir / "f.yaml"
+        flow.write_text("appId: x\n---\n- launchApp\n- takeScreenshot: evidence\n")
+        ws.mark(case, "automated", flow="flows/f.yaml")
+        flow.write_text("appId: x\n---\n- inputRandomEmail\n- tapOn: \"Sign up\"\n")     # edited after marking
+        with mock.patch.object(runner, "require_maestro", return_value="maestro"), \
+                mock.patch.object(runner.devices, "resolve_device", return_value=Device("ios", "u1", "iPhone", "iOS")), \
+                mock.patch.object(runner.devices, "app_info", return_value={"installed": True, "debug": False}), \
+                mock.patch.object(runner, "Executor") as executor:
+            doc = runner.run(ws, "ios", only=["TC-001"], retries=0)
+        executor.return_value.execute.assert_not_called()
+        record = doc["results"][case[0]["key"]]
+        self.assertEqual(record["status"], "blocked")
+        self.assertTrue(record["message"].startswith("Data-safety guard"))
+
+
 class RunnerHelperTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -792,6 +932,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue((self.ws.subflows_dir / "hide-keyboard.yaml").exists())
         self.assertTrue((self.ws.subflows_dir / "scroll-until-visible.yaml").exists())
         self.assertIn(".env", (self.ws.root / ".gitignore").read_text())
+        self.assertIn("cases.json", (self.ws.root / ".gitignore").read_text())
         self.assertTrue(self.ws.status_report()["warnings"])   # FIRST_SCREEN_TEXT placeholder flagged
 
 

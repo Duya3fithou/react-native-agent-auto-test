@@ -23,7 +23,7 @@ Test case (.xlsx/.csv) ──► Claude đọc case + code app ──► viết 
 Mở Claude Code ở bất kỳ đâu và dán prompt (thay đường dẫn cho đúng):
 
 ```text
-Clone https://github.com/<your-org>/rn-maestro-smoke về ~/tools/rn-maestro-smoke rồi chạy ./install.sh.
+Clone https://github.com/Duya3fithou/react-native-agent-auto-test về ~/tools/rn-maestro-smoke rồi chạy ./install.sh.
 Sau đó dùng skill rn-smoke-test để chạy smoke test cho app React Native ở ~/projects/my-app
 với file test case "~/Downloads/[App - MyApp] Smoke testing.xlsx" trên iOS simulator.
 Tài khoản test: email ... / mật khẩu ... (nếu có).
@@ -130,7 +130,7 @@ Kiểm tra nhanh: `skills/rn-smoke-test/bin/rnsmoke doctor`
 
 **Cách A — script (khuyên dùng):**
 ```bash
-git clone https://github.com/<your-org>/rn-maestro-smoke ~/tools/rn-maestro-smoke
+git clone https://github.com/Duya3fithou/react-native-agent-auto-test ~/tools/rn-maestro-smoke
 ~/tools/rn-maestro-smoke/install.sh          # symlink skill vào ~/.claude/skills/rn-smoke-test
 ```
 `git pull` là cập nhật xong (vì là symlink). `--copy` để copy thay vì symlink, `--project <path>` để cài
@@ -138,20 +138,34 @@ riêng cho một project.
 
 **Cách B — plugin marketplace của Claude Code:**
 ```text
-/plugin marketplace add <your-org>/rn-maestro-smoke
+/plugin marketplace add Duya3fithou/react-native-agent-auto-test
 /plugin install rn-maestro-smoke@rn-maestro-smoke
 ```
 
 **Cách C — không cài:** mở Claude Code ngay trong thư mục repo này (file `CLAUDE.md` sẽ hướng dẫn Claude).
 
-## 5. Dữ liệu test & bảo mật
+## 5. An toàn dữ liệu & dữ liệu test
 
-- Tài khoản/dữ liệu test để trong `<project>/.maestro/smoke/.env` (mẫu: `.env.example`), flow dùng `${TEST_EMAIL}`.
-  File này đã được git-ignore; flow không bao giờ chứa mật khẩu.
-- Case cần trạng thái dữ liệu riêng (user có 2 profile, đã book lớp, có gói tập...) → Claude sẽ liệt kê
-  và hỏi **một lần**; không có thì case đó là `PENDING [Blocked]`.
-- Claude **không sửa source code app**, không làm thao tác không thể hoàn tác (thanh toán thật, xoá tài khoản,
-  tạo dữ liệu trên production) khi chưa được bạn đồng ý rõ ràng. Nên test trên bản dev/staging.
+**Mỗi phiên smoke test chỉ được thay đổi dữ liệu của ĐÚNG MỘT tài khoản test, ngoài ra không động vào gì.** Thiếu
+test được, nhưng không được tạo dữ liệu rác trong hệ thống.
+
+- Cung cấp **một** tài khoản test riêng trên môi trường dev/staging trong `<project>/.maestro/smoke/.env`
+  (`TEST_EMAIL` / `TEST_PASSWORD`; mẫu: `.env.example`). File đã git-ignore; flow không bao giờ chứa mật khẩu.
+  Biến tài khoản khác (`TEST_EMAIL_2`, `ADMIN_PASSWORD`...) bị bỏ qua, và một lần chạy không cho đổi sang tài khoản khác.
+- **Không bao giờ tự động hoá** (ghi `PENDING [Manual] Data safety: ...`): đăng ký tài khoản — kể cả case đăng ký kiểu
+  "bỏ trống tên", "mật khẩu không khớp", vì muốn tới form phải dùng email mới và nếu validation bị lỗi sẽ tạo tài
+  khoản thật — thêm profile, đặt lịch/booking, waitlist, mua hàng, thanh toán, claim, đăng bài, gửi feedback, upload,
+  ký waiver, xoá hoặc huỷ bất cứ thứ gì, đổi mật khẩu, xoá tài khoản.
+- **Được phép**: xem màn hình, đăng nhập/đăng xuất bằng tài khoản test, sửa thông tin của chính tài khoản đó theo
+  kiểu ghi lại cùng một giá trị mỗi lần.
+- **Chặn bằng code, không tắt được**: trước khi chạy, `rnsmoke` quét mọi flow và subflow; flow nào gõ danh tính khác
+  (email khác, email `+timestamp`, tên ngẫu nhiên), bấm nút tạo/đăng ký/xoá tài khoản hoặc nút tạo dữ liệu (book, buy,
+  submit, send, post, add, delete...), hay gọi API từ script đều bị từ chối, không chạy, và lý do được ghi vào cột
+  Note. Nút bị nhận nhầm (ví dụ tab tên "Book") có thể khai báo là vô hại ngay trong file flow — `rnsmoke status`
+  liệt kê từng dòng khai báo đó để người duyệt.
+- Case cần trạng thái dữ liệu (2 profile, đã book lớp...) chỉ chạy nếu tài khoản test duy nhất đã có sẵn trạng thái đó;
+  Claude hỏi một lần và không bao giờ tự tạo.
+- Claude **không sửa source code app**.
 
 ## 6. Thư mục trong project React Native
 
@@ -159,14 +173,15 @@ riêng cho một project.
 <project>/.maestro/smoke/
   config.json        app id cho iOS/Android, cổng Metro
   manifest.json      mỗi test case → flow / manual / blocked (+ lý do)
-  cases.json         test case đã parse lần gần nhất
+  cases.json         test case đã parse lần gần nhất (git-ignored)
   flows/<section>/   1 flow Maestro cho mỗi case          ← nên commit
   subflows/          launch sạch, login, ẩn bàn phím...   ← nên commit
   .env               dữ liệu test (git-ignored)
   runs/              kết quả từng lần chạy (git-ignored)
 ```
-Sprint sau: đưa file test case mới, flow cũ được dùng lại (case sửa nhẹ tự relink), Claude chỉ viết flow
-cho case mới.
+**Commit thư mục `.maestro/smoke/` vào repo của app** (`.env`, `runs/`, `cases.json` đã git-ignore, ở lại máy). Khi đó
+mọi tester / mọi máy dùng lại flow: lần sau chạy thẳng *run → export* — không phân loại, không khám phá UI, không viết
+flow. Case sửa nhẹ tự relink; case mới được báo `PENDING [Not automated]` và Claude đề nghị tự động hoá riêng.
 
 ## 7. Lệnh CLI (Claude tự dùng, bạn cũng có thể chạy tay)
 

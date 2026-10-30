@@ -17,9 +17,10 @@ import shutil
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from . import safety
 from .util import TEMPLATES_DIR, UserError, fold, now_iso, read_json, write_json
 
-GITIGNORE = ".env\nruns/\ninspect/\n.metro.pid\n"
+GITIGNORE = ".env\nruns/\ninspect/\n.metro.pid\ncases.json\n"
 STATUSES = ("automated", "manual", "blocked", "todo")
 RELINK_THRESHOLD = 0.85
 
@@ -221,9 +222,13 @@ class Workspace:
 
     def mark(self, cases: List[dict], status: str, flow: Optional[str] = None, reason: Optional[str] = None,
              platforms: Optional[List[str]] = None, requires: Optional[List[str]] = None,
-             uncovered: Optional[str] = None) -> str:
+             uncovered: Optional[str] = None, data: Optional[str] = None) -> str:
         if status not in STATUSES:
             raise UserError(f"Unknown status '{status}'")
+        bad_vars = [v for v in requires or [] if safety.is_identity_var(v) and v not in safety.ALLOWED_IDENTITY]
+        if bad_vars:
+            raise UserError(f"{', '.join(bad_vars)}: one test account per session - only "
+                            f"{', '.join(safety.ALLOWED_IDENTITY)} can be required")
         rel = None
         if status == "automated":
             if not flow:
@@ -234,6 +239,8 @@ class Workspace:
             if not path.exists():
                 raise UserError(f"Flow file not found: {flow} (paths are relative to {self.root})")
             rel = self.rel(path)
+            level = data or "none"
+            safety.require_safe(path, level)            # refuses unsafe flows before they are linked
         manifest = self.load_manifest()
         for case in cases:
             entry = manifest["cases"].get(case["key"], {})
@@ -243,8 +250,10 @@ class Workspace:
             entry.pop("needs_review", None)
             if rel:
                 entry["flow"] = rel
-            if status == "todo":
+                entry["data"] = data or "none"
+            if status in ("todo", "manual"):
                 entry.pop("flow", None)
+                entry.pop("data", None)
             if reason is not None:
                 entry["reason"] = reason
             elif status == "automated":
@@ -266,7 +275,7 @@ class Workspace:
         doc = self.load_cases()
         manifest = self.load_manifest()
         keys = {c["key"] for c in doc["cases"]}
-        rows = []
+        rows, exceptions = [], []
         for case in doc["cases"]:
             entry = manifest["cases"].get(case["key"]) or {}
             status = entry.get("status", "todo")
@@ -284,11 +293,15 @@ class Workspace:
                         problems.append("flow has no takeScreenshot step (no evidence)")
                     if "appId" not in text.split("\n---", 1)[0]:
                         problems.append("flow header has no appId")
+                    found = safety.check_flow(path, entry.get("data") or "none")
+                    problems += [f"DATA-SAFETY (will not run) {f.describe()}" for f in safety.violations(found)]
+                    exceptions += [(case["id"], f) for f in found if f.allowed_by]
             if entry.get("needs_review"):
                 problems.append(f"relinked from {entry.get('relinked_from')} after the case text changed - review the flow")
             rows.append({"id": case["id"], "key": case["key"], "row": case["row"], "section": case["section"],
                          "status": status, "flow": entry.get("flow"), "reason": entry.get("reason"),
                          "requires": entry.get("requires"), "coverage": entry.get("coverage", "full"),
+                         "data": entry.get("data") if status == "automated" else None,
                          "problems": problems, "description": case["description"]})
         warnings = []
         for subflow in sorted(self.subflows_dir.glob("*.yaml")) if self.subflows_dir.exists() else []:
@@ -296,6 +309,8 @@ class Workspace:
                 warnings.append(f"subflows/{subflow.name} still waits for the FIRST_SCREEN_TEXT placeholder - "
                                 "replace it with text from the app's first screen")
         return {"source": doc["source"], "cases": rows, "warnings": warnings,
+                "safe_tap_exceptions": [{"id": cid, "tap": f.text, "file": Path(f.file).name, "line": f.line,
+                                         "reason": f.allowed_by} for cid, f in exceptions],
                 "orphans": sorted(k for k in manifest["cases"] if k not in keys)}
 
 

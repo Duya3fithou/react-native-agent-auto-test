@@ -65,10 +65,16 @@ Rules:
   element, wrong screen) → the case FAILS; do not rewrite the expectation.
 - **Dynamic parts** (`{facility_name}`, dates, counts) → `.*` or the env value used in the flow.
 - **No fixed sleeps** — use `extendedWaitUntil` / `waitForAnimationToEnd`.
-- **Data hygiene.** Prefer read-only paths and client-side validation. When a case must create data
-  (sign-up, booking), use unique values (`+${new Date().getTime()}@example.com`) on a non-production
-  backend only, and say so in the header comment.
-- **Credentials** only via `${VAR}` from `.env`; declare them with `mark --requires VAR1,VAR2` so the
+- **Data safety (absolute, see SKILL.md).** A flow may only read, sign in/out with the ONE session
+  account, and (with `mark --data account`) make idempotent edits to that account's own fields. Never
+  type any e-mail but `${TEST_EMAIL}`, never generate identities (`+${Date}`, `inputRandomEmail`), never
+  submit a sign-up form — not even with invalid data to test validation (if validation regressed, a real
+  account would be created) — and never book, buy, submit, send, post, add, delete or cancel anything.
+  Such cases are `manual` ("Data safety: would create ..."). `rnsmoke` scans every flow and subflow and
+  refuses violations; `# rnsmoke-safe-tap: "<label>" -- <reason>` may clear a tap that provably changes
+  no server data (a tab named "Book", a coordinate tap on an overlay) and is listed for review.
+- **Credentials** only via `${TEST_EMAIL}` / `${TEST_PASSWORD}` from `.env` (one account; other account
+  variables are dropped before Maestro runs); declare them with `mark --requires VAR1,VAR2` so the
   runner reports `blocked` (not a confusing failure) when they are missing.
 - **Evidence**: `takeScreenshot: evidence` right after the decisive assertion. Extra screenshots for
   intermediate steps are fine (`takeScreenshot: step1-...`).

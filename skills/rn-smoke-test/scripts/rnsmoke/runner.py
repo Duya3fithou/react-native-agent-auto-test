@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from . import devices, metro
+from . import devices, metro, safety
 from .util import UserError, fold, info, now_iso, read_json, require_maestro, short, slugify, warn, write_json
 from .workspace import Workspace, select_cases
 
@@ -361,9 +361,10 @@ def run(ws: Workspace, platform: str, device_id: Optional[str] = None, only: Opt
             info("No failed/error cases in this run - nothing to re-run.")
             return doc
 
-    env = ws.env_vars()
+    env = safety.filter_env(ws.env_vars())          # only the single session account reaches Maestro
     env.update(APP_ID=app_id, PLATFORM=platform)
     jobs: Dict[str, FlowJob] = {}
+    guarded = 0
     for case in selected:
         entry = manifest.get(case["key"]) or {}
         status = entry.get("status", "todo")
@@ -377,8 +378,12 @@ def run(ws: Workspace, platform: str, device_id: Optional[str] = None, only: Opt
         else:
             path = ws.flow_path(entry["flow"])
             missing_vars = [v for v in entry.get("requires") or [] if not env.get(v)]
+            unsafe = safety.violations(safety.check_flow(path, entry.get("data") or "none")) if path.exists() else []
             if not path.exists():
                 record = _case_record(case, entry, "error", f"Flow file missing: {entry['flow']}", flow=entry["flow"])
+            elif unsafe:
+                guarded += 1
+                record = _case_record(case, entry, "blocked", safety.summary(unsafe), flow=entry["flow"])
             elif missing_vars:
                 record = _case_record(case, entry, "blocked",
                                       f"Missing test data {', '.join(missing_vars)} (set in {ws.rel(ws.env_path)})",
@@ -393,10 +398,15 @@ def run(ws: Workspace, platform: str, device_id: Optional[str] = None, only: Opt
     info(f"[{platform}] {device.label()} | app {app_id} {app.get('version') or ''} ({app.get('build') or '?'})"
          f"{' debug' if app.get('debug') else ''}")
     info(f"[{platform}] {len(selected)} case(s) selected, {len(queue)} flow(s) to run -> {run_dir}")
+    if guarded:
+        warn(f"{guarded} case(s) NOT run: their flows break the data-safety rules (see `rnsmoke status`)")
     if dry_run:
         for job in queue:
             info(f"  would run {job.rel}  ({', '.join(c['id'] for c in job.cases)})")
         return doc
+    if queue:
+        account = safety.lock_session(run_dir, env)
+        info(f"[{platform}] test account for this session: {account or 'none (read-only flows only)'}")
     write_json(results_path, doc)
 
     executor = Executor(maestro, device, run_dir, env, flow_timeout, video, reinstall_driver)

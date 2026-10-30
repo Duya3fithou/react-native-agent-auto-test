@@ -12,6 +12,9 @@
 | `error: Invalid Maestro flow syntax` | unknown property / YAML mistake | `maestro check-syntax <flow>`; see cheatsheet (e.g. no `timeout` on `assertVisible`) |
 | `Element not found` but it is on the screenshot | regex metacharacters, typographic apostrophe, text split across elements, label vs input | escape / `.*`, `rnsmoke inspect` to see exact strings, relative selectors |
 | Tap does nothing near the bottom | keyboard or LogBox toast on top | `hide-keyboard` / `dismiss-dev-overlays` subflows |
+| `Data-safety guard: ...` (case blocked, not run) / `mark` refuses a flow | the flow would type another identity, create an account or a record, or the tap cannot be verified | rewrite it, or mark the case `--manual "Data safety: ..."`; a tap that provably changes no server data may get `# rnsmoke-safe-tap: "<label>" -- <reason>` |
+| `This run already used the test account ...` | a different `TEST_EMAIL` than earlier in the same run | one account per session: restore it, or start a new run |
+| `ignoring extra account variables` | `.env` holds more than one account | remove them; only `TEST_EMAIL` / `TEST_PASSWORD` (or `TEST_USERNAME` / `TEST_PHONE`) are used |
 | Typed text has leftovers | field was pre-filled and cursor in the middle | tap with `point: "95%,50%"` then `eraseText` |
 | Text ends up in the previous field / stray digits (`2125550123510001`) | next field was under the keyboard, the tap hit a key | `hide-keyboard` subflow after every field, tapping a label above the field; `assertVisible` the typed value |
 | Password fields stay empty, only `•` typed | iOS "Use Strong Password?" sheet | `rnsmoke device-setup --platform ios` |

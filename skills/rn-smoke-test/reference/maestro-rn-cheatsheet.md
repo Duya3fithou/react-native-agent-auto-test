@@ -55,7 +55,8 @@ the action and take the evidence screenshot immediately after the assertion.
 ```yaml
 - tapOn: "Email address"
 - inputText: "user+${new Date().getTime()}@example.com"
-- inputRandomEmail          # also inputRandomPersonName / inputRandomNumber / inputRandomText
+- inputRandomNumber         # also inputRandomText. inputRandomEmail / inputRandomPersonName are
+                            # refused by the data-safety guard (they invent identities)
 - eraseText: 80             # deletes BACKWARDS from the cursor
 ```
 To clear a pre-filled field, place the cursor at the end first:
